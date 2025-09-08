@@ -1,0 +1,147 @@
+---
+globs: package.json,**/package.json,turbo.json,bunfig.toml
+alwaysApply: false
+---
+
+# Bun Workspace + Turbo Monorepo
+
+<core_philosophy>
+**Single lockfile, shared scripts, fast pipelines**
+
+- Manage dependencies at the repo root with Bun; commit `bun.lock`
+- Use Turbo for orchestration; keep package scripts consistent
+- Keep builds incremental; define clear `outputs` for caching
+- Prefer simple per-package scripts; compose with Turbo at the root
+  </core_philosophy>
+
+## Structure
+
+<structure>
+**Recommended layout**
+
+- Root: `package.json`, `bun.lock`, `turbo.json`, tooling configs
+- Workspaces: `backend/`, `frontend/` (name each package in its `package.json`)
+- Add both to root `workspaces` for installation and linking
+  </structure>
+
+```json
+// package.json (root)
+{
+  "private": true,
+  "packageManager": "bun@1.x",
+  "workspaces": ["backend", "frontend"],
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "format": "turbo run format",
+    "format:check": "turbo run format:check",
+    "test": "turbo run test"
+  }
+}
+```
+
+## Installation
+
+<installation>
+**Fast, reproducible installs**
+
+- Always run `bun install` at the repo root
+- Never run package managers inside workspaces directly
+- Use `--frozen-lockfile` in CI for deterministic installs
+  </installation>
+
+```bash
+bun install
+bun install --frozen-lockfile # CI
+```
+
+## Scripts per Package
+
+<scripts_matrix>
+**Keep a common script contract**
+
+- `dev`: start local dev server (watch)
+- `build`: produce distributable output (`dist/**` or framework default)
+- `start`: run the built app (if applicable)
+- `lint`, `format`, `format:check`, `test`: tooling hooks
+  </scripts_matrix>
+
+```json
+// backend/package.json (example)
+{
+  "name": "@app/backend",
+  "scripts": {
+    "dev": "bun --watch src/index.ts",
+    "build": "bun build src/index.ts --outdir dist --target node",
+    "start": "bun dist/index.js",
+    "lint": "eslint .",
+    "format": "prettier -w .",
+    "format:check": "prettier -c .",
+    "test": "bun test"
+  }
+}
+```
+
+```json
+// frontend/package.json (example)
+{
+  "name": "@app/frontend",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "start": "vite preview --port 5173",
+    "lint": "eslint .",
+    "format": "prettier -w .",
+    "format:check": "prettier -c .",
+    "test": "bun test"
+  }
+}
+```
+
+## Turbo Pipeline
+
+<turbo_pipeline>
+**Cache what matters; wire deps properly**
+
+- `build` depends on parent `^build`; cache `dist/**` (and framework outputs)
+- `dev` is non-cached and `persistent`
+- `test` depends on `^build`; cache coverage artifacts
+  </turbo_pipeline>
+
+```json
+// turbo.json
+{
+  "$schema": "https://turbo.build/schema.json",
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**", ".next/**", "!.next/cache/**"]
+    },
+    "dev": { "cache": false, "persistent": true },
+    "lint": { "dependsOn": ["^lint"] },
+    "format": { "cache": false },
+    "format:check": { "cache": false },
+    "test": { "dependsOn": ["^build"], "outputs": ["coverage/**"] }
+  }
+}
+```
+
+## Bun Config
+
+<bun_config>
+**Optional `bunfig.toml` for repo-wide settings**
+
+- Pin registry and enable coverage in `bun test`
+- Configure `install.scopes` if using private registries
+  </bun_config>
+
+```toml
+[install]
+registry = "https://registry.npmjs.org"
+lockfile = true
+
+[test]
+coverage = true
+```
+

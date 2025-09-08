@@ -1,0 +1,158 @@
+---
+globs: backend/**/*.ts
+alwaysApply: false
+---
+
+# Hono + Bun API Rules
+
+<core_philosophy>
+**Lean, typed handlers with consistent responses**
+
+- Prefer small, pure handlers; keep side effects in services
+- Use `Context` types and explicit status codes for every response
+- Always return JSON with a consistent error shape: `{ error, message }`
+- Centralize error handling via `app.onError` and avoid `throw`ing raw errors in handlers
+- Validate all input (query, params, body) with Zod before use
+- Keep Bun-specific wiring minimal: `Bun.serve({ fetch: app.fetch })`
+  </core_philosophy>
+
+## Routing Conventions
+
+<routing_conventions>
+**Paths, methods, and status codes**
+
+- Use RESTful resource paths; reserve `/health` for uptime checks
+- Use plural nouns for collections (`/products`) and ids for single resources (`/products/:id`)
+- Respond with 201 for creations, 204 for deletions with no body
+- Namespacing: prefer `/api/*` when exposing to a UI; keep `/health` top-level
+  </routing_conventions>
+
+```ts
+// Example router with typed params and Zod validation
+import { Hono, type Context } from 'hono'
+import { z } from 'zod'
+
+const app = new Hono()
+
+const Product = z.object({
+  name: z.string().min(1),
+  price: z.number().nonnegative(),
+})
+
+app.get('/api/products', async (c: Context) => {
+  const products = await listProducts()
+  return c.json(products, 200)
+})
+
+app.get('/api/products/:id', async (c: Context) => {
+  const id = c.req.param('id')
+  const product = await findProduct(id)
+  if (!product) return c.json({ error: 'NotFound', message: 'Product not found' }, 404)
+  return c.json(product, 200)
+})
+
+app.post('/api/products', async (c: Context) => {
+  const parsed = Product.safeParse(await c.req.json())
+  if (!parsed.success) return c.json({ error: 'ValidationError', message: parsed.error.message }, 400)
+  const created = await createProduct(parsed.data)
+  return c.json(created, 201)
+})
+
+app.delete('/api/products/:id', async (c: Context) => {
+  const id = c.req.param('id')
+  await deleteProduct(id)
+  return c.body(null, 204)
+})
+```
+
+## Middleware
+
+<middleware>
+**CORS, logging, and security**
+
+- Use `hono/cors` and configure explicit origins; set `credentials: true` when needed
+- Add lightweight request logging in dev (method, path, status, timing)
+- Consider `hono/pretty-json` in dev only; never in production
+  </middleware>
+
+```ts
+import { cors } from 'hono/cors'
+
+app.use('/*', cors({
+  origin: ['http://localhost:5173'],
+  credentials: true,
+}))
+
+// Simple dev logger
+app.use('*', async (c, next) => {
+  const start = performance.now()
+  await next()
+  const ms = Math.round(performance.now() - start)
+  console.debug(`${c.req.method} ${new URL(c.req.url).pathname} -> ${c.res.status} ${ms}ms`)
+})
+```
+
+## Error Handling
+
+<error_handling>
+**Single `onError` with normalized body**
+
+- Register one `ErrorHandler` via `app.onError`
+- Hide stack traces from responses; log them to stderr
+- Return `{ error: 'InternalError', message }` with 500
+- For 404, optionally set `app.notFound` to return `{ error: 'NotFound' }`
+  </error_handling>
+
+```ts
+import type { Context, ErrorHandler } from 'hono'
+
+const errorHandler: ErrorHandler = (err: Error, c: Context) => {
+  console.error(err.stack)
+  return c.json({ error: 'InternalError', message: err.message }, 500)
+}
+
+app.onError(errorHandler)
+
+app.notFound(c => c.json({ error: 'NotFound', message: 'Route not found' }, 404))
+```
+
+## Bun Server Wiring
+
+<bun_server>
+**Production-ready `Bun.serve` defaults**
+
+- Read `PORT` from env; default to `3005` for local dev
+- Use `fetch: app.fetch` and do not wrap with extra routers
+- Keep `Bun.serve` as the only server entry in the backend package
+  </bun_server>
+
+```ts
+const PORT = Number(process.env.PORT) || 3005
+const server = Bun.serve({ fetch: app.fetch, port: PORT })
+console.log(`API running at http://localhost:${server.port}`)
+```
+
+## Testing (bun:test)
+
+<testing>
+**Test handlers via Fetch**
+
+- Prefer request-level tests against `app.fetch`
+- Use `bun:test` with `describe/it` and `mock` when needed
+- Assert status codes and response JSON shape
+  </testing>
+
+```ts
+import { describe, it, expect } from 'bun:test'
+import app from '../src/index'
+
+describe('health', () => {
+  it('returns healthy', async () => {
+    const res = await app.request('/health')
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.status).toBe('healthy')
+  })
+})
+```
+

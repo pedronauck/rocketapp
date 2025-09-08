@@ -1,0 +1,144 @@
+---
+globs: frontend/src/**/*.ts,frontend/src/**/*.tsx
+alwaysApply: false
+---
+
+# React Query (TanStack) Guidelines
+
+<core_philosophy>
+**Treat server-state as derived and cacheable**
+
+- Co-locate queries with components; keep fetchers stateless and reusable
+- Use stable, structured query keys; avoid inline string concatenation
+- Prefer longer `staleTime` for data that rarely changes; tune `retry`
+- Use mutations for writes; invalidate or update cache deterministically
+- Handle errors at the boundary (toasts, error components) not deep in fetchers
+  </core_philosophy>
+
+## Client Setup
+
+<client_setup>
+**Default options match project standards**
+
+- `retry: 1` and `staleTime: 30_000` (30s) by default
+- Wrap app with `QueryClientProvider`; keep a singleton `QueryClient`
+- Optionally add Devtools in dev
+  </client_setup>
+
+```tsx
+// frontend/src/main.tsx (excerpt)
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+
+const queryClient = new QueryClient({
+  defaultOptions: { queries: { retry: 1, staleTime: 30_000 } },
+})
+
+<QueryClientProvider client={queryClient}>{/* ... */}</QueryClientProvider>
+```
+
+## Query Keys
+
+<query_keys>
+**Centralize and type keys**
+
+- Define a `queryKeys` helper to ensure stability and avoid typos
+- Keys are arrays: `['products', id]`, `['orders', { page, q }]`
+  </query_keys>
+
+```ts
+// frontend/src/lib/query-keys.ts
+export const queryKeys = {
+  products: {
+    all: ['products'] as const,
+    list: (params?: { q?: string }) => ['products', params ?? {}] as const,
+    detail: (id: string) => ['products', id] as const,
+  },
+} as const
+```
+
+## Fetcher Utility
+
+<fetcher>
+**Single JSON fetcher with error normalization**
+
+- Throw on non-2xx; include status code and body when possible
+- Do not show toasts inside fetchers; let callers decide
+  </fetcher>
+
+```ts
+// frontend/src/lib/api.ts
+export async function api<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
+  const res = await fetch(input, { ...init, headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) } })
+  if (!res.ok) {
+    let message = res.statusText
+    try { const body = await res.json(); message = body?.message ?? message } catch {}
+    throw new Error(`${res.status} ${message}`)
+  }
+  return res.json() as Promise<T>
+}
+```
+
+## Queries
+
+<queries>
+**Colocate queries, select minimal data, cache smartly**
+
+- Use typed return values; narrow with `select` when possible
+- Derive `enabled` from required params to avoid pointless requests
+- Prefer pagination params in the key to isolate caches
+  </queries>
+
+```tsx
+import { useQuery } from '@tanstack/react-query'
+import { api } from '@/lib/api'
+import { queryKeys } from '@/lib/query-keys'
+
+type Product = { id: string; name: string; price: number }
+
+export function useProducts(q?: string) {
+  return useQuery({
+    queryKey: queryKeys.products.list(q ? { q } : undefined),
+    queryFn: () => api<Product[]>(`/api/products${q ? `?q=${encodeURIComponent(q)}` : ''}`),
+    select: (data) => data.sort((a, b) => a.name.localeCompare(b.name)),
+  })
+}
+```
+
+## Mutations
+
+<mutations>
+**Invalidate or update related caches**
+
+- After create/update/delete, either:
+  - invalidate affected keys (`queryClient.invalidateQueries({ queryKey })`), or
+  - optimistically update via `setQueryData` and rollback on error
+- Keep mutation functions small and focused on the network call
+  </mutations>
+
+```tsx
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { api } from '@/lib/api'
+import { queryKeys } from '@/lib/query-keys'
+
+type NewProduct = { name: string; price: number }
+
+export function useCreateProduct() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: NewProduct) => api<Product>('/api/products', { method: 'POST', body: JSON.stringify(payload) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.products.all })
+    },
+  })
+}
+```
+
+## Error UX
+
+<error_ux>
+**Clear surfaces for failures**
+
+- Prefer component-level error UIs or toasts; do not swallow errors
+- Consider an app-level error boundary for uncaught errors
+  </error_ux>
+
