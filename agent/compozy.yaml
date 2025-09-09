@@ -1,14 +1,19 @@
-name: RocketApp
-version: "0.0.1"
-description: Pokedex Twilio Research App
+name: pokemon-vision
+version: "0.1.0"
+description: Image-based Pokémon recognition using a vision tool and agent orchestration
+
+author:
+  name: Compozy
+  url: https://github.com/pedronauck
 
 workflows:
-  - source: ./workflows/main.yaml
+  - source: ./workflow.yaml
 
 models:
   - provider: openai
-    model: gpt-4.1-2025-04-14
+    model: gpt-4o-mini
     api_key: "{{ .env.OPENAI_API_KEY }}"
+    default: true
 
 runtime:
   type: bun
@@ -17,14 +22,3 @@ runtime:
     - --allow-read
     - --allow-net
     - --allow-write
-
-autoload:
-  enabled: true
-  strict: true
-  include:
-    - "agents/*.yaml"
-    - "tools/*.yaml"
-  exclude:
-    - "**/*~"
-    - "**/*.bak"
-    - "**/*.tmp"
