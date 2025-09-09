@@ -13,6 +13,7 @@ export function generateTwiML(opts: TwiMLOpts): string {
   attributes += ` ttsProvider="Google"`;
   attributes += ` voice="en-GB-Standard-B"`;
   attributes += ` language="en-GB"`;
+  attributes += ` speechRate="1.15"`; // Speed up by 15% (1.0 is normal, 2.0 is double speed)
   
   // Add welcome greeting if provided
   if (welcomeGreeting) {
