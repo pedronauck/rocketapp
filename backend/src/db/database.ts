@@ -518,6 +518,11 @@ class CallDatabase {
       log.error('[db] Error closing database', error);
     }
   }
+
+  // Expose database for demo seeding (development only)
+  getDbConnection() {
+    return this.db;
+  }
 }
 
 // Singleton instance

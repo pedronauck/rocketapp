@@ -182,4 +182,109 @@ export function registerPokemonRoutes(app: Hono) {
       timestamp: new Date().toISOString()
     });
   });
+
+  // Demo data seeder (development only)
+  app.post('/api/pokemon/seed-demo', authMiddleware, async (c) => {
+    try {
+      const user = c.get('user');
+      const userPhoneNumber = user.phoneNumber;
+      
+      // Create demo caller  
+      await db.upsertCaller(userPhoneNumber, 'Demo User');
+      
+      // Demo conversations with requested Pokemon in order: Squirtle, Bulbasaur, Charmander, Butterfree, Pikachu
+      const demoConversations = [
+        {
+          callSid: 'DEMO001',
+          messages: JSON.stringify([
+            { role: 'user', content: 'Tell me about Squirtle!' },
+            { role: 'assistant', content: 'Squirtle is a Water-type Pokemon and one of the original starter Pokemon from the Kanto region. It has a hard shell that protects it from attacks and can withdraw into it for defense. Squirtle evolves into Wartortle and then into Blastoise.' }
+          ]),
+          duration: 135
+        },
+        {
+          callSid: 'DEMO002', 
+          messages: JSON.stringify([
+            { role: 'user', content: 'What about Bulbasaur?' },
+            { role: 'assistant', content: 'Bulbasaur is a Grass/Poison-type Pokemon, the first Pokemon in the National Pokedex. It is one of the three Kanto starter Pokemon. Bulbasaur has a bulb on its back that stores energy from the sun and evolves into Ivysaur and then Venusaur.' }
+          ]),
+          duration: 140
+        },
+        {
+          callSid: 'DEMO003',
+          messages: JSON.stringify([
+            { role: 'user', content: 'How about Charmander?' },
+            { role: 'assistant', content: 'Charmander is a Fire-type Pokemon, another one of the three original Kanto starters. It has a flame on the tip of its tail that indicates its health and emotions. Charmander evolves into Charmeleon and finally into the powerful Charizard.' }
+          ]),
+          duration: 125
+        },
+        {
+          callSid: 'DEMO004',
+          messages: JSON.stringify([
+            { role: 'user', content: 'Tell me about Butterfree' },
+            { role: 'assistant', content: 'Butterfree is a Bug/Flying-type Pokemon that evolves from Metapod, which evolves from Caterpie. It has beautiful wings with toxic scales and is known for its ability to detect honey from flowers over 6 miles away. Butterfree is often associated with Ash Ketchum from the anime.' }
+          ]),
+          duration: 110
+        },
+        {
+          callSid: 'DEMO005',
+          messages: JSON.stringify([
+            { role: 'user', content: 'And finally, Pikachu!' },
+            { role: 'assistant', content: 'Pikachu is the iconic Electric-type Pokemon and the franchise mascot! It stores electricity in its cheek pouches and releases it through its tail. Pikachu evolves from Pichu and can evolve into Raichu with a Thunder Stone, though many trainers prefer to keep it as Pikachu.' }
+          ]),
+          duration: 120
+        }
+      ];
+
+      const now = Math.floor(Date.now() / 1000);
+      
+      // Insert demo conversations (skip if already exist)
+      for (let i = 0; i < demoConversations.length; i++) {
+        const conv = demoConversations[i];
+        const startTime = now - (i * 3600); // 1 hour apart
+        const endTime = startTime + conv.duration;
+        
+        // Check if conversation already exists
+        const existing = await db.getConversationBySid(conv.callSid);
+        if (existing) {
+          log.debug(`[pokemon] Demo conversation ${conv.callSid} already exists, skipping`);
+          continue;
+        }
+        
+        // Create conversation
+        await db.createConversation(conv.callSid, userPhoneNumber);
+        
+        // Update with messages and end time
+        await db.updateConversationMessages(conv.callSid, JSON.parse(conv.messages), true);
+        
+        // Update timestamps for demo data
+        try {
+          const dbConn = db.getDbConnection();
+          const stmt = dbConn.prepare(`
+            UPDATE conversations 
+            SET started_at = ?, ended_at = ?
+            WHERE call_sid = ?
+          `);
+          stmt.run(startTime, endTime, conv.callSid);
+        } catch (err) {
+          log.warn('[pokemon] Could not update timestamps, using defaults');
+        }
+      }
+
+      log.info('[pokemon] Demo data seeded successfully');
+      
+      return c.json({
+        success: true,
+        message: 'Demo data created successfully',
+        phoneNumber: userPhoneNumber,
+        conversationsCreated: demoConversations.length
+      });
+    } catch (error) {
+      log.error('[pokemon] Error seeding demo data', { error });
+      return c.json({ 
+        error: 'InternalError', 
+        message: 'Failed to seed demo data' 
+      }, 500);
+    }
+  });
 }
