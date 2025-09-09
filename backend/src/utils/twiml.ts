@@ -9,10 +9,10 @@ export function generateTwiML(opts: TwiMLOpts): string {
   // Build ConversationRelay attributes carefully
   let attributes = `url="${escapeXml(websocketUrl)}"`;
   
-  // Add TTS configuration for Amazon Polly
-  attributes += ` ttsProvider="Amazon"`;
-  attributes += ` voice="Matthew"`;
-  attributes += ` language="en-US"`;
+  // Add TTS configuration for Google with UK voice
+  attributes += ` ttsProvider="Google"`;
+  attributes += ` voice="en-GB-Standard-B"`;
+  attributes += ` language="en-GB"`;
   
   // Add welcome greeting if provided
   if (welcomeGreeting) {
