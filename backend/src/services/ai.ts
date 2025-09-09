@@ -1,5 +1,4 @@
 import {
-  generateText,
   streamText,
   experimental_createMCPClient as createMCPClient,
 } from 'ai';
@@ -17,38 +16,6 @@ This conversation is spoken aloud: NEVER format answers as Markdown or code; use
 Avoid emojis, bullet points, and special characters such as asterisks, underscores, code backticks, tildes, hashes, angle brackets, brackets, parentheses, slashes, or backslashes.
 Spell out numbers in words (e.g., twenty, not 20). Do not mention that you are an AI.`;
 const SYSTEM_PROMPT = env.SYSTEM_PROMPT || DEFAULT_SYSTEM_PROMPT;
-
-export async function getAnswer(question: string): Promise<string> {
-  const mcpUrl = env.POKE_MCP_SSE_URL;
-  // If poke-mcp is available via SSE, fetch tools dynamically and allow tool-calling
-  if (mcpUrl) {
-    const mcpClient = await createMCPClient({
-      transport: { type: 'sse', url: mcpUrl },
-    });
-    try {
-      const tools = await mcpClient.tools();
-      const { text } = await generateText({
-        model: openai(DEFAULT_MODEL),
-        system:
-          SYSTEM_PROMPT +
-          '\nWhen you need factual Pokémon data (types, evolutions, abilities, stats), use the available tools instead of guessing.',
-        prompt: question,
-        tools,
-      });
-      return text.trim();
-    } finally {
-      await mcpClient.close();
-    }
-  }
-
-  // Fallback (no MCP server configured)
-  const { text } = await generateText({
-    model: openai(DEFAULT_MODEL),
-    system: SYSTEM_PROMPT,
-    prompt: question,
-  });
-  return text.trim();
-}
 
 // Streaming variant to reduce latency for spoken responses
 export async function streamAnswer(
@@ -85,11 +52,11 @@ async function createStream(
 ): Promise<AsyncIterable<string>> {
   const baseMessages = buildBaseMessages(messages, prompt);
   const usePrompt = wantsPrompt(baseMessages, prompt);
-  const mcpUrl = env.POKE_MCP_SSE_URL;
-  if (mcpUrl) {
-    const stream = await streamWithMcp(baseMessages, usePrompt, opts);
-    if (stream) return stream;
-  }
+  // const mcpUrl = env.POKE_MCP_SSE_URL;
+  // if (mcpUrl) {
+  //   const stream = await streamWithMcp(baseMessages, usePrompt, opts);
+  //   if (stream) return stream;
+  // }
   return streamWithoutMcp(baseMessages, usePrompt, opts);
 }
 
@@ -111,7 +78,7 @@ function wantsPrompt(msgs: SimpleMessage[], prompt?: string) {
   return !hasUser && !!prompt ? { prompt } : undefined;
 }
 
-async function streamWithMcp(
+export async function streamWithMcp(
   msgs: SimpleMessage[],
   usePrompt: { prompt: string } | undefined,
   opts?: { abortSignal?: AbortSignal }
