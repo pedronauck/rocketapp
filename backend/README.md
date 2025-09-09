@@ -4,7 +4,7 @@ This backend exposes a simple AI-powered Pokedex Call Center using Twilio Conver
 
 Key endpoints:
 
-- `GET  /twiml` – returns TwiML that connects the call to your ConversationRelay WebSocket (tutorial-style).
+- `POST /twiml` – returns TwiML that connects the call to your ConversationRelay WebSocket (tutorial-style).
 - `GET  /ws` – WebSocket endpoint Twilio connects to for the live conversation.
 - (compat) `POST /twilio/voice` and `GET /twilio/relay` remain available.
 
@@ -20,7 +20,7 @@ Environment variables (see `backend/.env`):
 
 Twilio setup:
 
-1. Configure your incoming Voice webhook (in Twilio Console) to `GET` `https://<your-ngrok>/twiml`.
+1. Configure your incoming Voice webhook (in Twilio Console) to `POST` `https://<your-ngrok>/twiml`.
 2. The returned TwiML instructs Twilio to connect the call to `wss://<your-ngrok>/ws`.
 3. ConversationRelay sends transcribed prompts to the WS. The backend streams back `{ type: "text", token, last: false }` chunks and finally `{ last: true }`.
 
@@ -88,7 +88,7 @@ export NGROK_URL=abcd1234.ngrok-free.app   # no scheme
 
 3. Configure your Twilio Phone Number (Console → Phone Numbers → Manage → Active Numbers)
 
-- A Call Comes In → Webhook (GET) → `https://<your-ngrok>/twiml`
+- A Call Comes In → Webhook (POST) → `https://<your-ngrok>/twiml`
 - Save
 
 4. (Optional, recommended) Enable request validation
