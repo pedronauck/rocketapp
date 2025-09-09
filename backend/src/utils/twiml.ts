@@ -11,11 +11,20 @@ export function generateTwiML(opts: TwiMLOpts): string {
     ? ` welcomeGreeting="${escapeXml(welcomeGreeting)}"`
     : '';
 
+  // Use ElevenLabs with a professional voice
+  const voiceConfig = 'UgBBYS2sOqTuMpoF3BR0'; // Clear, professional ElevenLabs voice
+
   return (
     `<?xml version="1.0" encoding="UTF-8"?>` +
     `<Response>` +
     `<Connect>` +
-    `<ConversationRelay url="${escapeXml(websocketUrl)}"${greetingAttr}/>` +
+    `<ConversationRelay url="${escapeXml(websocketUrl)}"` +
+    ` ttsProvider="ElevenLabs"` +
+    ` voice="${voiceConfig}"` +
+    `${greetingAttr}` +
+    ` welcomeGreetingInterruptible="false"` +
+    ` dtmfDetection="true"` +
+    ` interruptible="true"/>` +
     `</Connect>` +
     `</Response>`
   );
