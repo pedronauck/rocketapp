@@ -23,6 +23,16 @@ const EnvSchema = z.object({
     .default(
       'Hi! Welcome to the Pokédex Call Center. Ask me about any Pokémon!'
     ),
+  // Quick placeholder speech while the model thinks
+  RELAY_THINKING_ENABLED: z
+    .union([z.string(), z.boolean()])
+    .transform((v) => (typeof v === 'string' ? v.toLowerCase() !== 'false' : v))
+    .optional()
+    .default(true),
+  RELAY_THINKING_TEXT: z
+    .string()
+    .optional()
+    .default('Got it — thinking through the best answer now.'),
   TWILIO_AUTH_TOKEN: z.string().optional(),
 
   // Prompt

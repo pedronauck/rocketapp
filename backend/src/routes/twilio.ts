@@ -36,6 +36,9 @@ export function registerTwilioRoutes(app: Hono, upgradeWebSocket: UpgradeWS) {
 }
 
 function registerTwiMLRoute(app: Hono, env: ReturnType<typeof getEnv>) {
+  // Twilio typically calls this endpoint with POST, but allow GET for
+  // compatibility and easier local/browser debugging.
+  app.post('/twiml', async (c) => respondWithTwiML(c, env));
   app.get('/twiml', async (c) => respondWithTwiML(c, env));
 }
 
@@ -220,6 +223,17 @@ async function handlePrompt(
   const { turnId, startedAt } = logPromptReceived(text, state);
   const timer = startTimeout(abortRef);
   try {
+    // Send a quick placeholder so callers hear immediate feedback
+    const env = getEnv();
+    if (env.RELAY_THINKING_ENABLED) {
+      const thinking = (env.RELAY_THINKING_TEXT || '').trim();
+      if (thinking) {
+        ws.send(
+          JSON.stringify({ type: 'text', token: thinking, last: false })
+        );
+      }
+    }
+
     const { stream, usedMessages } = await getTextStream(state, text, abortRef);
     logStreamStart(isDebug, state, turnId, usedMessages);
     const { chunks, chars } = await sendStream(ws, stream);
