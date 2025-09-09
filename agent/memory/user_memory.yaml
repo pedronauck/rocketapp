@@ -1,0 +1,14 @@
+resource: memory
+id: conversation_memory
+description: Memory to save state of a conversation
+version: 0.1.0
+
+key: "user:{{.workflow.input.conversation_id}}"
+
+type: token_based
+max_tokens: 32000
+max_messages: 100
+
+persistence:
+  type: redis
+  ttl: 168h

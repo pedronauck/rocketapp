@@ -7,12 +7,19 @@ const EnvSchema = z.object({
     .default('info'),
 
   // AI / Models
-  AI_MODEL: z.string().min(1).default('gpt-4o-mini'),
+  // Default model per requirements
+  AI_MODEL: z.string().min(1).default('openai/gpt-oss-20b'),
+  // Choose which provider to use for AI SDK models
+  PROVIDER: z
+    .union([z.literal('openai'), z.literal('groq')])
+    .optional()
+    .default('openai'),
   AI_TIMEOUT_MS: z.coerce.number().int().positive().default(20_000),
 
   // External services
   POKE_MCP_SSE_URL: z.string().url().optional(),
   OPENAI_API_KEY: z.string().optional(),
+  GROQ_API_KEY: z.string().optional(),
 
   // Twilio / Relay
   NGROK_URL: z.string().optional(),
@@ -23,6 +30,12 @@ const EnvSchema = z.object({
     .default(
       'Hi! Welcome to the Pokédex Call Center. Ask me about any Pokémon!'
     ),
+  // Quick placeholder speech while the model thinks
+  RELAY_THINKING_ENABLED: z
+    .union([z.string(), z.boolean()])
+    .transform((v) => (typeof v === 'string' ? v.toLowerCase() !== 'false' : v))
+    .optional()
+    .default(true),
   TWILIO_AUTH_TOKEN: z.string().optional(),
 
   // Prompt

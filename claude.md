@@ -44,6 +44,7 @@ Create a PRD when:
 ## Bun Workspace + Turbo Monorepo
 
 ### Core Philosophy
+
 **Single lockfile, shared scripts, fast pipelines**
 
 - Manage dependencies at the repo root with Bun; commit `bun.lock`
@@ -52,6 +53,7 @@ Create a PRD when:
 - Prefer simple per-package scripts; compose with Turbo at the root
 
 ### Structure
+
 **Recommended layout**
 
 - Root: `package.json`, `bun.lock`, `turbo.json`, tooling configs
@@ -59,6 +61,7 @@ Create a PRD when:
 - Add both to root `workspaces` for installation and linking
 
 ### Installation
+
 **Fast, reproducible installs**
 
 - Always run `bun install` at the repo root
@@ -66,6 +69,7 @@ Create a PRD when:
 - Use `--frozen-lockfile` in CI for deterministic installs
 
 ### Scripts per Package
+
 **Keep a common script contract**
 
 - `dev`: start local dev server (watch)
@@ -74,6 +78,7 @@ Create a PRD when:
 - `lint`, `format`, `format:check`, `test`: tooling hooks
 
 ### Turbo Pipeline
+
 **Cache what matters; wire deps properly**
 
 - `build` depends on parent `^build`; cache `dist/**` (and framework outputs)
@@ -83,6 +88,7 @@ Create a PRD when:
 ## Bun.js Best Practices
 
 ### Core Philosophy
+
 **All-in-One Development Philosophy:**
 
 - Bun is an all-in-one toolkit: runtime, bundler, test runner, package manager
@@ -91,6 +97,7 @@ Create a PRD when:
 - Embrace the speed advantages in all aspects of development
 
 ### Runtime Optimization
+
 **High-Performance Runtime Usage:**
 
 - Use Bun's native APIs for file operations
@@ -99,6 +106,7 @@ Create a PRD when:
 - Take advantage of native JSON parsing
 
 ### Testing with Bun
+
 **Comprehensive Testing Approach:**
 
 - Use Bun's built-in test runner for speed
@@ -107,6 +115,7 @@ Create a PRD when:
 - Leverage fast test execution
 
 ### Environment Configuration
+
 **Robust Environment Setup:**
 
 - Use .env files with automatic loading
@@ -115,6 +124,7 @@ Create a PRD when:
 - Implement type-safe environment access
 
 ### Performance Optimization
+
 **Maximum Performance Strategies:**
 
 - Use Bun's fast startup for development
@@ -122,9 +132,10 @@ Create a PRD when:
 - Use native APIs instead of polyfills
 - Optimize bundle splitting for production
 
-## Hono + Bun API Rules (backend/**/*.ts)
+## Hono + Bun API Rules (backend/\*_/_.ts)
 
 ### Core Philosophy
+
 **Lean, typed handlers with consistent responses**
 
 - Prefer small, pure handlers; keep side effects in services
@@ -135,6 +146,7 @@ Create a PRD when:
 - Keep Bun-specific wiring minimal: `Bun.serve({ fetch: app.fetch })`
 
 ### Routing Conventions
+
 **Paths, methods, and status codes**
 
 - Use RESTful resource paths; reserve `/health` for uptime checks
@@ -143,6 +155,7 @@ Create a PRD when:
 - Namespacing: prefer `/api/*` when exposing to a UI; keep `/health` top-level
 
 ### Middleware
+
 **CORS, logging, and security**
 
 - Use `hono/cors` and configure explicit origins; set `credentials: true` when needed
@@ -150,6 +163,7 @@ Create a PRD when:
 - Consider `hono/pretty-json` in dev only; never in production
 
 ### Error Handling
+
 **Single `onError` with normalized body**
 
 - Register one `ErrorHandler` via `app.onError`
@@ -158,6 +172,7 @@ Create a PRD when:
 - For 404, optionally set `app.notFound` to return `{ error: 'NotFound' }`
 
 ### Bun Server Wiring
+
 **Production-ready `Bun.serve` defaults**
 
 - Read `PORT` from env; default to `3005` for local dev
@@ -165,15 +180,17 @@ Create a PRD when:
 - Keep `Bun.serve` as the only server entry in the backend package
 
 ### Testing (bun:test)
+
 **Test handlers via Fetch**
 
 - Prefer request-level tests against `app.fetch`
 - Use `bun:test` with `describe/it` and `mock` when needed
 - Assert status codes and response JSON shape
 
-## React Query (TanStack) Guidelines (frontend/src/**/*.ts,frontend/src/**/*.tsx)
+## React Query (TanStack) Guidelines (frontend/src/**/\*.ts,frontend/src/**/\*.tsx)
 
 ### Core Philosophy
+
 **Treat server-state as derived and cacheable**
 
 - Co-locate queries with components; keep fetchers stateless and reusable
@@ -183,6 +200,7 @@ Create a PRD when:
 - Handle errors at the boundary (toasts, error components) not deep in fetchers
 
 ### Client Setup
+
 **Default options match project standards**
 
 - `retry: 1` and `staleTime: 30_000` (30s) by default
@@ -190,18 +208,21 @@ Create a PRD when:
 - Optionally add Devtools in dev
 
 ### Query Keys
+
 **Centralize and type keys**
 
 - Define a `queryKeys` helper to ensure stability and avoid typos
 - Keys are arrays: `['products', id]`, `['orders', { page, q }]`
 
 ### Fetcher Utility
+
 **Single JSON fetcher with error normalization**
 
 - Throw on non-2xx; include status code and body when possible
 - Do not show toasts inside fetchers; let callers decide
 
 ### Queries
+
 **Colocate queries, select minimal data, cache smartly**
 
 - Use typed return values; narrow with `select` when possible
@@ -209,6 +230,7 @@ Create a PRD when:
 - Prefer pagination params in the key to isolate caches
 
 ### Mutations
+
 **Invalidate or update related caches**
 
 - After create/update/delete, either:
@@ -217,6 +239,7 @@ Create a PRD when:
 - Keep mutation functions small and focused on the network call
 
 ### Error UX
+
 **Clear surfaces for failures**
 
 - Prefer component-level error UIs or toasts; do not swallow errors
@@ -246,6 +269,7 @@ To ensure the theme switching functionality works correctly across light and dar
 - States: `bg-destructive text-destructive-foreground`, `bg-accent text-accent-foreground`
 
 ### Core Philosophy
+
 **Shadcn UI Development Philosophy:**
 
 - Shadcn is copy-paste, not a dependency - you own the code
@@ -254,6 +278,7 @@ To ensure the theme switching functionality works correctly across light and dar
 - Styled with Tailwind CSS for flexibility
 
 ### Component Customization
+
 **Customization Guidelines:**
 
 - Directly edit component files after installation
@@ -263,6 +288,7 @@ To ensure the theme switching functionality works correctly across light and dar
 - Use Tailwind Variants for component styling
 
 ### Accessibility Best Practices
+
 **Critical Accessibility Requirements:**
 
 - Never remove Radix UI's accessibility attributes
@@ -272,6 +298,7 @@ To ensure the theme switching functionality works correctly across light and dar
 - Add proper ARIA labels where needed
 
 ### Theming Strategy
+
 **Comprehensive Theme Management:**
 
 - Use CSS variables for all color values
@@ -280,6 +307,7 @@ To ensure the theme switching functionality works correctly across light and dar
 - Support dark mode from the start
 
 ### Form Handling with @tanstack/react-form
+
 **Form Management Best Practices:**
 
 - Use the Form components for consistent styling
@@ -288,6 +316,7 @@ To ensure the theme switching functionality works correctly across light and dar
 - Provide clear feedback
 
 ### Animation Integration
+
 **Animation Strategy:**
 
 - Use Framer Motion for complex animations
@@ -296,6 +325,7 @@ To ensure the theme switching functionality works correctly across light and dar
 - Add subtle micro-interactions
 
 ### Performance Considerations
+
 **Critical Performance Patterns:**
 
 - Lazy load heavy components (Sheet, Dialog)
@@ -304,6 +334,7 @@ To ensure the theme switching functionality works correctly across light and dar
 - Optimize bundle size by importing only used components
 
 ### Testing Components
+
 **Comprehensive Testing Strategy:**
 
 - Test user interactions, not implementation

@@ -5,6 +5,7 @@ import dotenv from 'dotenv';
 import { getEnv } from './config/env';
 import { log } from './utils/log';
 import { registerTwilioRoutes } from './routes/twilio';
+import { registerStreamRoutes } from './routes/stream';
 import { initDatabase } from './db/database';
 
 const app = new Hono();
@@ -24,10 +25,11 @@ try {
 // CORS middleware applied only where needed (avoid WS upgrade conflicts)
 app.use(
   '/health',
-  cors({
-    origin: ['http://localhost:5173'],
-    credentials: true,
-  })
+  cors({ origin: ['http://localhost:5173'], credentials: true })
+);
+app.use(
+  '/api/*',
+  cors({ origin: ['http://localhost:5173'], credentials: true })
 );
 
 app.get('/health', (c: Context) => {
@@ -50,6 +52,7 @@ const errorHandler: ErrorHandler = (err: Error, c: Context) => {
 };
 
 registerTwilioRoutes(app, upgradeWebSocket);
+registerStreamRoutes(app);
 
 app.onError(errorHandler);
 

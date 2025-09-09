@@ -4,17 +4,21 @@ This backend exposes a simple AI-powered Pokedex Call Center using Twilio Conver
 
 Key endpoints:
 
-- `POST /twiml` – returns TwiML that connects the call to your ConversationRelay WebSocket (tutorial-style).
+- `POST /twiml` – returns TwiML that connects the call to your ConversationRelay WebSocket (tutorial-style). `GET /twiml` is also supported for local/browser debugging.
 - `GET  /ws` – WebSocket endpoint Twilio connects to for the live conversation.
 - (compat) `POST /twilio/voice` and `GET /twilio/relay` remain available.
+- `GET  /api/ask/stream?q=...` – Server‑Sent Events endpoint for browser/chat clients. Emits `thinking`, multiple `token` events, then `done`.
 
 Environment variables (see `backend/.env`):
 
-- `OPENAI_API_KEY` – API key for OpenAI models.
-- `AI_MODEL` – optional, defaults to `gpt-4o-mini`.
+- `PROVIDER` – `openai` (default) or `groq`.
+- `OPENAI_API_KEY` – required if `PROVIDER=openai`.
+- `GROQ_API_KEY` – required if `PROVIDER=groq`.
+- `AI_MODEL` – optional, defaults to `openai/gpt-oss-20b`.
 - `AI_TIMEOUT_MS` – optional, default `20000`; aborts slow generations/streams.
 - `NGROK_URL` – your ngrok domain without scheme (e.g., `abcd1234.ngrok-free.app`).
 - `RELAY_WELCOME_GREETING` – optional greeting spoken at call start.
+- `RELAY_THINKING_ENABLED` – optional, default `true`. When enabled, the backend sends a random friendly placeholder message immediately so callers hear something while the model is thinking. The system includes 30+ different friendly messages that are randomly selected for variety.
 - `POKE_MCP_SSE_URL` – optional MCP SSE endpoint (from poke-mcp) to enable tool-calling for Pokémon facts.
 - `TWILIO_AUTH_TOKEN` – optional; if set, `/twilio/voice` validates `X-Twilio-Signature`.
 
@@ -41,8 +45,9 @@ Using OpenAI with AI SDK:
 
 ```bash
 export OPENAI_API_KEY=sk-********************************
-# optional
-export AI_MODEL=gpt-4o-mini
+export PROVIDER=openai
+# optional override
+export AI_MODEL=openai/gpt-oss-20b
 
 cd backend
 bun run dev
@@ -61,6 +66,19 @@ export POKE_MCP_SSE_URL=http://localhost:3000/sse
 
 # 3) Start backend
 cd ../twilio-test/backend
+bun run dev
+```
+
+Using Groq via AI SDK (OpenAI-compatible):
+
+```bash
+# Set provider and Groq key
+export PROVIDER=groq
+export GROQ_API_KEY=gsk-********************************
+# optional override (defaults to openai/gpt-oss-20b)
+export AI_MODEL=openai/gpt-oss-20b
+
+cd backend
 bun run dev
 ```
 

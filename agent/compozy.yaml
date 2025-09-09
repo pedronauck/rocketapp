@@ -1,0 +1,30 @@
+name: RocketApp
+version: "0.0.1"
+description: Pokedex Twilio Research App
+
+workflows:
+  - source: ./workflows/main.yaml
+
+models:
+  - provider: openai
+    model: gpt-4.1-2025-04-14
+    api_key: "{{ .env.OPENAI_API_KEY }}"
+
+runtime:
+  type: bun
+  entrypoint: "./entrypoint.ts"
+  permissions:
+    - --allow-read
+    - --allow-net
+    - --allow-write
+
+autoload:
+  enabled: true
+  strict: true
+  include:
+    - "agents/*.yaml"
+    - "tools/*.yaml"
+  exclude:
+    - "**/*~"
+    - "**/*.bak"
+    - "**/*.tmp"
