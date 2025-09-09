@@ -7,12 +7,19 @@ const EnvSchema = z.object({
     .default('info'),
 
   // AI / Models
-  AI_MODEL: z.string().min(1).default('gpt-4o-mini'),
+  // Default model per requirements
+  AI_MODEL: z.string().min(1).default('openai/gpt-oss-20b'),
+  // Choose which provider to use for AI SDK models
+  PROVIDER: z
+    .union([z.literal('openai'), z.literal('groq')])
+    .optional()
+    .default('openai'),
   AI_TIMEOUT_MS: z.coerce.number().int().positive().default(20_000),
 
   // External services
   POKE_MCP_SSE_URL: z.string().url().optional(),
   OPENAI_API_KEY: z.string().optional(),
+  GROQ_API_KEY: z.string().optional(),
 
   // Twilio / Relay
   NGROK_URL: z.string().optional(),
@@ -29,10 +36,6 @@ const EnvSchema = z.object({
     .transform((v) => (typeof v === 'string' ? v.toLowerCase() !== 'false' : v))
     .optional()
     .default(true),
-  RELAY_THINKING_TEXT: z
-    .string()
-    .optional()
-    .default('Got it — thinking through the best answer now.'),
   TWILIO_AUTH_TOKEN: z.string().optional(),
 
   // Prompt

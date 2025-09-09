@@ -3,6 +3,7 @@ import type { Context } from 'hono';
 import { getEnv } from '../config/env';
 import { streamAnswer } from '../services/ai';
 import { log } from '../utils/log';
+import { getRandomThinkingMessage } from '../utils/thinking-messages';
 
 export function registerStreamRoutes(app: Hono) {
   app.get('/api/ask/stream', async (c) => handleSSE(c));
@@ -12,7 +13,7 @@ async function handleSSE(c: Context) {
   const q = c.req.query('q') || '';
   if (!q) return c.json({ error: 'bad_request', message: 'Missing q' }, 400);
   const env = getEnv();
-  const thinking = env.RELAY_THINKING_ENABLED ? (env.RELAY_THINKING_TEXT || '').trim() : '';
+  const thinking = env.RELAY_THINKING_ENABLED ? getRandomThinkingMessage() : '';
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {

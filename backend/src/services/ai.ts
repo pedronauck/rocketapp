@@ -2,12 +2,23 @@ import {
   streamText,
   experimental_createMCPClient as createMCPClient,
 } from 'ai';
-import { openai } from '@ai-sdk/openai';
+import { openai, createOpenAI } from '@ai-sdk/openai';
 import { getEnv } from '../config/env';
 import { log } from '../utils/log';
 
 const env = getEnv();
 const DEFAULT_MODEL = env.AI_MODEL;
+const PROVIDER = (env.PROVIDER || 'openai').toLowerCase();
+
+// Provider selection: OpenAI (default) or Groq via OpenAI-compatible endpoint
+const groqViaOpenAI = createOpenAI({
+  baseURL: 'https://api.groq.com/openai/v1',
+  apiKey: env.GROQ_API_KEY,
+});
+
+function selectModel(modelId: string) {
+  return PROVIDER === 'groq' ? groqViaOpenAI(modelId) : openai(modelId);
+}
 
 const DEFAULT_SYSTEM_PROMPT = `You are a friendly Pokédex Call Center agent.
 Answer questions about Pokémon clearly and concisely (1-3 sentences).
@@ -89,7 +100,7 @@ export async function streamWithMcp(
   try {
     const tools = await client.tools();
     const result = streamText({
-      model: openai(DEFAULT_MODEL),
+      model: selectModel(DEFAULT_MODEL),
       system: usePrompt ? SYSTEM_PROMPT : undefined,
       messages: usePrompt ? undefined : (toAiSdkMessages(msgs) as any),
       prompt: usePrompt?.prompt,
@@ -119,7 +130,7 @@ function streamWithoutMcp(
   opts?: { abortSignal?: AbortSignal }
 ) {
   const result = streamText({
-    model: openai(DEFAULT_MODEL),
+    model: selectModel(DEFAULT_MODEL),
     system: usePrompt ? SYSTEM_PROMPT : undefined,
     messages: usePrompt ? undefined : (toAiSdkMessages(msgs) as any),
     prompt: usePrompt?.prompt,

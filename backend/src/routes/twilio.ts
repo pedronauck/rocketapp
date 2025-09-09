@@ -12,6 +12,7 @@ import { getEnv } from '../config/env';
 import { log } from '../utils/log';
 import { sessions } from '../services/session';
 import { parseKnownMessage } from '../types/relay';
+import { getRandomThinkingMessage } from '../utils/thinking-messages';
 import type { Context } from 'hono';
 
 // Helpers
@@ -226,11 +227,9 @@ async function handlePrompt(
     // Send a quick placeholder so callers hear immediate feedback
     const env = getEnv();
     if (env.RELAY_THINKING_ENABLED) {
-      const thinking = (env.RELAY_THINKING_TEXT || '').trim();
+      const thinking = getRandomThinkingMessage();
       if (thinking) {
-        ws.send(
-          JSON.stringify({ type: 'text', token: thinking, last: false })
-        );
+        ws.send(JSON.stringify({ type: 'text', token: thinking, last: false }));
       }
     }
 
