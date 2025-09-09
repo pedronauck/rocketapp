@@ -11,29 +11,21 @@ export function generateTwiML(opts: TwiMLOpts): string {
     ? ` welcomeGreeting="${escapeXml(welcomeGreeting)}"`
     : '';
 
-  // Use Amazon Polly with robotic voice settings
-  // Using Matthew (male) or Joanna (female) in standard engine for more robotic sound
-  // Alternative: Use neural engine with prosody tags for robotic effect
+  // Use Amazon Polly Matthew voice for robotic sound
+  // Standard voices sound more robotic than neural voices
+  // See: https://www.twilio.com/docs/voice/twiml/say/text-speech#amazon-polly
   
   return (
     `<?xml version="1.0" encoding="UTF-8"?>` +
     `<Response>` +
     `<Connect>` +
     `<ConversationRelay url="${escapeXml(websocketUrl)}"` +
-    ` ttsProvider="amazon-polly"` +
-    ` voice="Matthew"` +
-    ` engine="standard"` +
+    ` voice="Polly.Matthew"` +
     ` language="en-US"` +
     `${greetingAttr}` +
     ` welcomeGreetingInterruptible="false"` +
     ` dtmfDetection="true"` +
-    ` interruptible="true">` +
-    `<TtsVoiceSettings>` +
-    `<Prosody rate="85%" pitch="-10%" volume="loud">` +
-    `<AmazonEffect name="drc" />` +
-    `</Prosody>` +
-    `</TtsVoiceSettings>` +
-    `</ConversationRelay>` +
+    ` interruptible="true"/>` +
     `</Connect>` +
     `</Response>`
   );
