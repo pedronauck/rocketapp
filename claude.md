@@ -1,5 +1,46 @@
 # Project Guidelines
 
+## Project Planning
+
+When working on larger features or multi-step implementations, use Product Requirements Documents (PRDs) to plan and track progress:
+
+### PRD Best Practices
+
+1. **Location**: Store PRDs in the `/tasks/` folder with descriptive names (e.g., `prd-skeleton-loaders.md`) and gh issues when neccessary
+
+2. **Structure**: Include these sections:
+   - **Project Overview**: Objective, background, success metrics
+   - **Current State Analysis**: What exists, what's broken, what needs improvement
+   - **Implementation Plan**: Break work into phases with clear priorities
+   - **Technical Guidelines**: Architecture decisions, patterns to follow
+   - **Acceptance Criteria**: Specific, measurable outcomes for each phase
+
+3. **Phase-Based Implementation**:
+   - Break large features into 2-4 phases based on priority and dependencies
+   - Each phase should be completable in 1-3 days
+   - Mark phases as completed with ✅ as work progresses
+   - Use clear priority levels: HIGH, MEDIUM, LOW
+
+4. **Progress Tracking**:
+   - Update the PRD as you complete tasks, marking items with ✅
+   - Add implementation summaries after each phase
+   - Include test coverage and impact metrics
+   - Document architectural decisions and patterns established
+
+5. **Examples**:
+   - See `/tasks/prd-skeleton-loaders.md` for a well-structured PRD example
+   - Notice how it breaks skeleton implementation into logical phases
+   - Each phase has clear deliverables and acceptance criteria
+
+### When to Create a PRD
+
+Create a PRD when:
+- The feature spans multiple components or files
+- Implementation will take more than 1-2 days
+- The work involves architectural decisions
+- You need to coordinate multiple related changes
+- The user requests comprehensive planning before implementation
+
 ## Bun Workspace + Turbo Monorepo
 
 ### Core Philosophy
