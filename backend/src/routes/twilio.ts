@@ -371,20 +371,71 @@ async function handleSetup(parsed: any, state: RelayState) {
         // Try to get caller info quickly (100ms timeout)
         const caller = await db.getCallerQuickly(state.phoneNumber, 100);
         
+        // Get conversation context for returning callers (non-blocking)
+        let contextPromise: Promise<any> | null = null;
+        if (caller?.name) {
+          contextPromise = db.getConversationContext(state.phoneNumber, 24); // Last 24 hours
+        }
+        
         if (caller?.name) {
           // Returning caller - personalized greeting
           callerName = caller.name;
           // Special pronunciation for bdougie
           const displayName = callerName === 'bdougie' ? 'bee dug ee' : callerName;
           
-          // Variety of casual system prompts
+          // Get conversation context if available
+          let contextInfo = '';
+          if (contextPromise) {
+            try {
+              const context = await Promise.race([
+                contextPromise,
+                new Promise(resolve => setTimeout(() => resolve(null), 150)) // 150ms timeout
+              ]);
+              
+              if (context && (context.recentTopics?.length > 0 || context.conversationCount > 0)) {
+                const timeSinceLastCall = context.lastCallTime 
+                  ? Math.floor((Date.now() / 1000 - context.lastCallTime) / 3600) 
+                  : null;
+                
+                // Build context string
+                if (context.recentTopics.length > 0) {
+                  contextInfo = ` Recently, they've asked about ${context.recentTopics.join(', ')}.`;
+                }
+                
+                if (timeSinceLastCall !== null && timeSinceLastCall < 1) {
+                  contextInfo += ' They called less than an hour ago.';
+                } else if (timeSinceLastCall !== null && timeSinceLastCall < 24) {
+                  contextInfo += ` They last called ${timeSinceLastCall} hours ago.`;
+                }
+                
+                log.info('[relay] Added conversation context', {
+                  phoneNumber: state.phoneNumber,
+                  topics: context.recentTopics,
+                  conversationCount: context.conversationCount
+                });
+              }
+            } catch (err) {
+              log.debug('[relay] Could not get conversation context', { err });
+            }
+          }
+          
+          // Variety of casual system prompts with context
           const prompts = [
-            `You are a friendly Pokédex assistant. The caller is ${callerName} (pronounced "${displayName}"). They just heard a greeting, so jump right in with a casual "So what Pokémon are you curious about?" or similar. Keep it brief and conversational.`,
-            `You are a helpful Pokédex assistant. ${callerName} (pronounced "${displayName}") is calling back. Since they were already greeted, just ask casually what Pokémon they want to know about. Be friendly but brief.`,
-            `You're the Pokédex assistant. ${callerName} (pronounced "${displayName}") just called and was greeted. Follow up naturally with something like "Which Pokémon should we look up?" Keep it casual and short.`,
-            `You are a knowledgeable Pokédex assistant. The caller ${callerName} (pronounced "${displayName}") was just welcomed. Simply ask what Pokémon info they need today. Stay casual and concise.`,
-            `You're helping ${callerName} (pronounced "${displayName}") with Pokémon information. They just heard a greeting, so get right to it - ask what Pokémon they're interested in. Keep it friendly and brief.`
+            `You are a friendly Pokédex assistant. The caller is ${callerName} (pronounced "${displayName}").${contextInfo} They just heard a greeting, so jump right in with a casual "So what Pokémon are you curious about?" or similar. Keep it brief and conversational.`,
+            `You are a helpful Pokédex assistant. ${callerName} (pronounced "${displayName}") is calling back.${contextInfo} Since they were already greeted, just ask casually what Pokémon they want to know about. Be friendly but brief.`,
+            `You're the Pokédex assistant. ${callerName} (pronounced "${displayName}") just called and was greeted.${contextInfo} Follow up naturally with something like "Which Pokémon should we look up?" Keep it casual and short.`,
+            `You are a knowledgeable Pokédex assistant. The caller ${callerName} (pronounced "${displayName}") was just welcomed.${contextInfo} Simply ask what Pokémon info they need today. Stay casual and concise.`,
+            `You're helping ${callerName} (pronounced "${displayName}") with Pokémon information.${contextInfo} They just heard a greeting, so get right to it - ask what Pokémon they're interested in. Keep it friendly and brief.`
           ];
+          
+          // If they've talked about specific Pokemon recently, we can reference them
+          if (contextInfo.includes('Recently')) {
+            const contextAwarePrompts = [
+              `You are a friendly Pokédex assistant. ${callerName} is back!${contextInfo} They were just greeted. You can reference their previous interests if relevant, or help with something new. Keep it natural and brief.`,
+              `You're the Pokédex assistant helping ${callerName}.${contextInfo} After the greeting, see if they want to continue exploring those topics or learn about something new. Stay conversational.`
+            ];
+            prompts.push(...contextAwarePrompts);
+          }
           
           systemPrompt = prompts[Math.floor(Math.random() * prompts.length)];
           log.info('[relay] Recognized returning caller', { name: callerName });
