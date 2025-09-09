@@ -15,6 +15,7 @@ import { parseKnownMessage } from '../types/relay';
 import { getRandomThinkingMessage } from '../utils/thinking-messages';
 import type { Context } from 'hono';
 import { getDatabase } from '../db/database';
+import { getBatchWriter } from '../services/batch-writer';
 
 // Helpers
 function resolveRelayWsUrl(req: Request): string {
@@ -217,13 +218,13 @@ function makeRelayHandlerFactory(env: ReturnType<typeof getEnv>) {
         if (currentAbort) currentAbort.abort('ws-closed');
         currentAbort = null;
 
-        // Mark conversation as ended in database
+        // Mark conversation as ended using batch writer
         if (callSid && phoneNumber) {
           try {
-            const db = getDatabase();
+            const batchWriter = getBatchWriter();
             const finalMessages = sessions.get(callSid) || [];
-            db.updateConversationMessages(callSid, finalMessages, true); // true = ended
-            log.info('[relay] Marked conversation as ended in database', {
+            batchWriter.enqueue(callSid, finalMessages, true); // true = ended, will flush immediately
+            log.info('[relay] Marked conversation as ended in batch', {
               callSid,
             });
           } catch (err) {
@@ -318,12 +319,54 @@ async function handleSetup(parsed: any, state: RelayState) {
       try {
         const db = getDatabase();
         
-        // Create conversation record
-        db.createConversation(callSid, state.phoneNumber);
-        log.info('[relay] Created conversation in database', {
-          callSid,
-          phoneNumber: state.phoneNumber,
-        });
+        // Check for existing conversation (recovery scenario)
+        const existingConv = await db.getConversationBySid(callSid);
+        
+        if (existingConv && existingConv.messages) {
+          // Recover conversation context
+          try {
+            const messages = JSON.parse(existingConv.messages) as SimpleMessage[];
+            if (messages.length > 0) {
+              sessions.set(callSid, messages);
+              log.info('[relay] Recovered conversation from database', {
+                callSid,
+                messageCount: messages.length
+              });
+            }
+          } catch (parseErr) {
+            log.error('[relay] Failed to parse recovered messages', parseErr);
+          }
+        } else {
+          // Check for recent unclosed conversation (within last 5 minutes)
+          const recentConvs = await db.getRecentConversation(state.phoneNumber, 1);
+          if (recentConvs.length > 0 && !recentConvs[0].ended_at) {
+            const timeSinceStart = Date.now() / 1000 - recentConvs[0].started_at;
+            if (timeSinceStart < 300) { // 5 minutes
+              try {
+                const messages = JSON.parse(recentConvs[0].messages) as SimpleMessage[];
+                if (messages.length > 0) {
+                  // Recover context from previous unclosed conversation
+                  sessions.set(callSid, messages);
+                  log.info('[relay] Recovered recent unclosed conversation', {
+                    oldCallSid: recentConvs[0].call_sid,
+                    newCallSid: callSid,
+                    messageCount: messages.length,
+                    ageSeconds: Math.round(timeSinceStart)
+                  });
+                }
+              } catch (parseErr) {
+                log.error('[relay] Failed to parse recent conversation messages', parseErr);
+              }
+            }
+          }
+          
+          // Create new conversation record
+          db.createConversation(callSid, state.phoneNumber);
+          log.info('[relay] Created conversation in database', {
+            callSid,
+            phoneNumber: state.phoneNumber,
+          });
+        }
         
         // Try to get caller info quickly (100ms timeout)
         const caller = await db.getCallerQuickly(state.phoneNumber, 100);
@@ -428,7 +471,32 @@ async function handlePrompt(
 
     const { stream, usedMessages } = await getTextStream(state, text, abortRef);
     logStreamStart(isDebug, state, turnId, usedMessages);
-    const { chunks, chars } = await sendStream(ws, stream);
+    const { chunks, chars, fullResponse } = await sendStream(ws, stream);
+    
+    // Save assistant response to session and database
+    if (state.callSidRef() && fullResponse) {
+      const history = sessions.get(state.callSidRef()!) || [];
+      const withAssistant: SimpleMessage[] = [
+        ...history,
+        { role: 'assistant', content: fullResponse },
+      ];
+      sessions.set(state.callSidRef()!, withAssistant);
+      
+      // Use batch writer for efficient database updates
+      if (state.phoneNumber) {
+        try {
+          const batchWriter = getBatchWriter();
+          batchWriter.enqueue(state.callSidRef()!, withAssistant, false);
+          log.debug('[relay] Queued conversation update with assistant response', {
+            callSid: state.callSidRef(),
+            messageCount: withAssistant.length,
+          });
+        } catch (err) {
+          log.error('[relay] Failed to queue conversation update', err);
+        }
+      }
+    }
+    
     logStreamFinish(state, turnId, startedAt, chunks, chars);
   } catch (err) {
     logStreamError(state, turnId, startedAt, err);
@@ -484,13 +552,16 @@ async function getTextStream(
     });
     sessions.set(state.callSidRef()!, withUser);
 
-    // Update conversation in database
+    // Use batch writer for user messages too
     if (state.phoneNumber) {
       try {
-        const db = getDatabase();
-        db.updateConversationMessages(state.callSidRef()!, withUser);
+        const batchWriter = getBatchWriter();
+        batchWriter.enqueue(state.callSidRef()!, withUser, false);
+        log.debug('[relay] Queued user message to batch', {
+          callSid: state.callSidRef(),
+        });
       } catch (err) {
-        log.error('[relay] Failed to update conversation messages', err);
+        log.error('[relay] Failed to queue user message', err);
       }
     }
 
@@ -521,13 +592,15 @@ function logStreamStart(
 async function sendStream(ws: WSContext, stream: AsyncIterable<string>) {
   let chunks = 0;
   let chars = 0;
+  let fullResponse = '';
   for await (const chunk of stream) {
     chunks++;
     chars += chunk.length;
+    fullResponse += chunk;
     ws.send(JSON.stringify({ type: 'text', token: chunk, last: false }));
   }
   ws.send(JSON.stringify({ type: 'text', token: '', last: true }));
-  return { chunks, chars };
+  return { chunks, chars, fullResponse };
 }
 
 function logStreamFinish(

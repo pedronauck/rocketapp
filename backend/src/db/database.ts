@@ -143,9 +143,69 @@ class CallDatabase {
     ]);
   }
 
+  // Get recent conversation for a phone number (for context recovery)
+  async getRecentConversation(phoneNumber: string, limit: number = 1): Promise<Conversation[]> {
+    return new Promise((resolve) => {
+      try {
+        const stmt = this.db.prepare(`
+          SELECT call_sid, phone_number, messages, started_at, ended_at
+          FROM conversations
+          WHERE phone_number = ?
+          ORDER BY started_at DESC
+          LIMIT ?
+        `);
+        const results = stmt.all(phoneNumber, limit) as Conversation[];
+        resolve(results || []);
+      } catch (error) {
+        log.error('[db] Error getting recent conversations', { phoneNumber, error });
+        resolve([]);
+      }
+    });
+  }
+
+  // Get conversation by call SID (for recovery after restart)
+  async getConversationBySid(callSid: string): Promise<Conversation | null> {
+    return new Promise((resolve) => {
+      try {
+        const stmt = this.db.prepare(`
+          SELECT call_sid, phone_number, messages, started_at, ended_at
+          FROM conversations
+          WHERE call_sid = ?
+        `);
+        const result = stmt.get(callSid) as Conversation | undefined;
+        resolve(result || null);
+      } catch (error) {
+        log.error('[db] Error getting conversation by SID', { callSid, error });
+        resolve(null);
+      }
+    });
+  }
+
+  // Mark all open conversations as ended (for cleanup)
+  closeAllOpenConversations(): number {
+    try {
+      const stmt = this.db.prepare(`
+        UPDATE conversations 
+        SET ended_at = unixepoch() 
+        WHERE ended_at IS NULL
+      `);
+      const result = stmt.run();
+      const count = result.changes;
+      if (count > 0) {
+        log.info('[db] Closed open conversations on shutdown', { count });
+      }
+      return count;
+    } catch (error) {
+      log.error('[db] Error closing open conversations', error);
+      return 0;
+    }
+  }
+
   // Close database connection
   close() {
     try {
+      // Close any open conversations first
+      this.closeAllOpenConversations();
       this.db.close();
       log.info('[db] Database connection closed');
     } catch (error) {
