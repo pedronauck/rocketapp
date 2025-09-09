@@ -14,6 +14,7 @@ import { sessions } from '../services/session';
 import { parseKnownMessage } from '../types/relay';
 import { getRandomThinkingMessage } from '../utils/thinking-messages';
 import type { Context } from 'hono';
+import { getDatabase } from '../db/database';
 
 // Helpers
 function resolveRelayWsUrl(req: Request): string {
@@ -37,8 +38,6 @@ export function registerTwilioRoutes(app: Hono, upgradeWebSocket: UpgradeWS) {
 }
 
 function registerTwiMLRoute(app: Hono, env: ReturnType<typeof getEnv>) {
-  // Twilio typically calls this endpoint with POST, but allow GET for
-  // compatibility and easier local/browser debugging.
   app.post('/twiml', async (c) => respondWithTwiML(c, env));
   app.get('/twiml', async (c) => respondWithTwiML(c, env));
 }
@@ -72,15 +71,35 @@ function registerRelayRoutes(
 }
 
 async function respondWithTwiML(c: Context, env: ReturnType<typeof getEnv>) {
+  // Extract phone number from Twilio POST data
+  let phoneNumber = '';
+  if (c.req.method === 'POST') {
+    try {
+      const formData = await c.req.parseBody();
+      phoneNumber = (formData.From as string) || '';
+      log.info('[twilio] Extracted phone number', { phoneNumber });
+    } catch (err) {
+      log.error('[twilio] Failed to parse form data', err);
+    }
+  }
+
   const domain = env.NGROK_URL;
-  const wsUrl = domain
+  let wsUrl = domain
     ? `wss://${domain}/ws`
     : resolveRelayWsUrl(c.req.raw).replace('/twilio/relay', '/ws');
+
+  // Add phone number as query parameter if available
+  if (phoneNumber) {
+    wsUrl += `?phone=${encodeURIComponent(phoneNumber)}`;
+  }
+
   const xml = generateTwiML({
     websocketUrl: wsUrl,
     welcomeGreeting: env.RELAY_WELCOME_GREETING,
   });
-  log.info('[twilio] respondWithTwiML -> replying TwiML with ws URL');
+  log.info('[twilio] respondWithTwiML -> replying TwiML with ws URL', {
+    wsUrl,
+  });
   return c.text(xml, 200, { 'Content-Type': 'text/xml' });
 }
 
@@ -113,13 +132,26 @@ async function validateSignatureIfConfigured(
 
 function makeRelayHandlerFactory(env: ReturnType<typeof getEnv>) {
   const isDebug = env.LOG_LEVEL === 'debug' || env.LOG_LEVEL === 'trace';
-  return (_c: unknown) => {
+  return (c: any) => {
     let currentAbort: any = null;
     let callSid: string | null = null;
+    let phoneNumber: string | null = null;
     const connectionId = nanoid(6);
+
+    // Extract phone number from query parameters
+    try {
+      const url = new URL(c.req.url);
+      phoneNumber = url.searchParams.get('phone');
+      if (phoneNumber) {
+        log.info('[relay] Phone number extracted from URL', { phoneNumber });
+      }
+    } catch (err) {
+      log.error('[relay] Failed to extract phone from URL', err);
+    }
+
     return {
       onOpen() {
-        log.info('[relay] open', { connectionId });
+        log.info('[relay] open', { connectionId, phoneNumber });
       },
       async onMessage(event: MessageEvent<WSMessageReceive>, ws: WSContext) {
         try {
@@ -132,6 +164,7 @@ function makeRelayHandlerFactory(env: ReturnType<typeof getEnv>) {
               connectionId,
               callSidRef: () => callSid,
               setCallSid: (v: string | null) => (callSid = v),
+              phoneNumber,
             },
             abortRef: {
               get: () => currentAbort,
@@ -152,8 +185,23 @@ function makeRelayHandlerFactory(env: ReturnType<typeof getEnv>) {
       onClose() {
         if (currentAbort) currentAbort.abort('ws-closed');
         currentAbort = null;
+
+        // Mark conversation as ended in database
+        if (callSid && phoneNumber) {
+          try {
+            const db = getDatabase();
+            const finalMessages = sessions.get(callSid) || [];
+            db.updateConversationMessages(callSid, finalMessages, true); // true = ended
+            log.info('[relay] Marked conversation as ended in database', {
+              callSid,
+            });
+          } catch (err) {
+            log.error('[relay] Failed to mark conversation as ended', err);
+          }
+        }
+
         if (callSid) sessions.clear(callSid);
-        log.info('[relay] close', { connectionId, callSid });
+        log.info('[relay] close', { connectionId, callSid, phoneNumber });
       },
     };
   };
@@ -170,6 +218,7 @@ type RelayState = {
   connectionId: string;
   callSidRef: () => string | null;
   setCallSid: (v: string | null) => void;
+  phoneNumber: string | null;
 };
 type AbortRef = { get: () => any; set: (a: any) => void };
 
@@ -207,8 +256,26 @@ function handleSetup(parsed: any, state: RelayState) {
         Boolean
       ) as SimpleMessage[]
     );
+
+    // Create conversation in database if we have a phone number
+    if (state.phoneNumber) {
+      try {
+        const db = getDatabase();
+        db.createConversation(callSid, state.phoneNumber);
+        log.info('[relay] Created conversation in database', {
+          callSid,
+          phoneNumber: state.phoneNumber,
+        });
+      } catch (err) {
+        log.error('[relay] Failed to create conversation in database', err);
+      }
+    }
   }
-  log.info('[relay] setup', { connectionId: state.connectionId, callSid });
+  log.info('[relay] setup', {
+    connectionId: state.connectionId,
+    callSid,
+    phoneNumber: state.phoneNumber,
+  });
 }
 
 async function handlePrompt(
@@ -290,6 +357,17 @@ async function getTextStream(
       abortSignal: abortRef.get().signal,
     });
     sessions.set(state.callSidRef()!, withUser);
+
+    // Update conversation in database
+    if (state.phoneNumber) {
+      try {
+        const db = getDatabase();
+        db.updateConversationMessages(state.callSidRef()!, withUser);
+      } catch (err) {
+        log.error('[relay] Failed to update conversation messages', err);
+      }
+    }
+
     return { stream, usedMessages: true } as const;
   }
   const stream = await streamAnswer(userText, {

@@ -6,11 +6,21 @@ import { getEnv } from './config/env';
 import { log } from './utils/log';
 import { registerTwilioRoutes } from './routes/twilio';
 import { registerStreamRoutes } from './routes/stream';
+import { initDatabase } from './db/database';
 
 const app = new Hono();
 dotenv.config();
 const env = getEnv();
 const PORT = env.PORT;
+
+// Initialize database
+try {
+  initDatabase(env.DATABASE_PATH);
+  log.info('[main] Database initialized');
+} catch (error) {
+  log.error('[main] Failed to initialize database', error);
+  // Continue running even if database fails - fallback to in-memory only
+}
 
 // CORS middleware applied only where needed (avoid WS upgrade conflicts)
 app.use(
