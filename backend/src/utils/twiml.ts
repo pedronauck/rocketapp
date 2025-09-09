@@ -5,27 +5,30 @@ type TwiMLOpts = {
 
 export function generateTwiML(opts: TwiMLOpts): string {
   const { websocketUrl, welcomeGreeting } = opts;
-  // Minimal TwiML that connects the call to ConversationRelay over WebSocket
-  // https://www.twilio.com/docs/voice/conversationrelay
-  const greetingAttr = welcomeGreeting
-    ? ` welcomeGreeting="${escapeXml(welcomeGreeting)}"`
-    : '';
-
-  // ConversationRelay with Amazon Polly voice for robotic sound
-  // Using Matthew standard voice - more robotic than Neural/Generative voices
+  
+  // Build ConversationRelay attributes carefully
+  let attributes = `url="${escapeXml(websocketUrl)}"`;
+  
+  // Add TTS configuration for Amazon Polly
+  attributes += ` ttsProvider="Amazon"`;
+  attributes += ` voice="Matthew"`;
+  attributes += ` language="en-US"`;
+  
+  // Add welcome greeting if provided
+  if (welcomeGreeting) {
+    attributes += ` welcomeGreeting="${escapeXml(welcomeGreeting)}"`;
+    attributes += ` welcomeGreetingInterruptible="false"`;
+  }
+  
+  // Add interaction settings
+  attributes += ` dtmfDetection="true"`;
+  attributes += ` interruptible="true"`;
   
   return (
     `<?xml version="1.0" encoding="UTF-8"?>` +
     `<Response>` +
     `<Connect>` +
-    `<ConversationRelay url="${escapeXml(websocketUrl)}"` +
-    ` ttsProvider="Amazon"` +
-    ` voice="Matthew"` +
-    ` language="en-US"` +
-    `${greetingAttr}` +
-    ` welcomeGreetingInterruptible="false"` +
-    ` dtmfDetection="true"` +
-    ` interruptible="true"/>` +
+    `<ConversationRelay ${attributes}/>` +
     `</Connect>` +
     `</Response>`
   );
