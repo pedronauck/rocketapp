@@ -11,29 +11,28 @@ export function generateTwiML(opts: TwiMLOpts): string {
     ? ` welcomeGreeting="${escapeXml(welcomeGreeting)}"`
     : '';
 
-  // Use ElevenLabs with Pokédex robotic voice settings
-  // Format: VOICE_ID-model-speed_stability_similarity
-  // Speed: 0.8 (slower), Stability: 0.9 (monotone), Similarity: 0.2 (robotic)
-  const voiceConfig = 'UgBBYS2sOqTuMpoF3BR0-flash_v2_5-0.8_0.9_0.2';
-
+  // Use Amazon Polly with robotic voice settings
+  // Using Matthew (male) or Joanna (female) in standard engine for more robotic sound
+  // Alternative: Use neural engine with prosody tags for robotic effect
+  
   return (
     `<?xml version="1.0" encoding="UTF-8"?>` +
     `<Response>` +
     `<Connect>` +
     `<ConversationRelay url="${escapeXml(websocketUrl)}"` +
-    ` ttsProvider="ElevenLabs"` +
-    ` voice="${voiceConfig}"` +
+    ` ttsProvider="amazon-polly"` +
+    ` voice="Matthew"` +
+    ` engine="standard"` +
+    ` language="en-US"` +
     `${greetingAttr}` +
     ` welcomeGreetingInterruptible="false"` +
     ` dtmfDetection="true"` +
-    ` interruptible="true"` +
-    ` speechModel="eleven_turbo_v2_5"` +
-    ` optimizeLatency="4">` +
-    `<TtsAudioEffects>` +
-    `<Effect type="reverb" roomSize="0.8" damping="0.3" wetLevel="0.35" dryLevel="0.65"/>` +
-    `<Effect type="echo" delay="0.15" decay="0.4" wetLevel="0.25" dryLevel="0.75"/>` +
-    `<Effect type="pitch" shift="-0.1"/>` +
-    `</TtsAudioEffects>` +
+    ` interruptible="true">` +
+    `<TtsVoiceSettings>` +
+    `<Prosody rate="85%" pitch="-10%" volume="loud">` +
+    `<AmazonEffect name="drc" />` +
+    `</Prosody>` +
+    `</TtsVoiceSettings>` +
     `</ConversationRelay>` +
     `</Connect>` +
     `</Response>`
