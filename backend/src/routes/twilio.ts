@@ -92,20 +92,20 @@ async function respondWithTwiML(c: Context, env: ReturnType<typeof getEnv>) {
             // Special pronunciation for bdougie
             const displayName = caller.name === 'bdougie' ? 'bee dug ee' : caller.name;
             
-            // Pokédex-style greeting variations for returning trainers
+            // Pokédex-style greeting variations with robotic reverb effect
             const greetings = [
-              `... Trainer ${displayName} recognized. ... Pokédex ready for query.`,
-              `... Identity confirmed: ${displayName}. ... Awaiting Pokémon selection.`,
-              `... Welcome back, Trainer ${displayName}. ... Database access granted.`,
-              `... Trainer profile loaded: ${displayName}. ... State target Pokémon.`,
-              `... User ${displayName} authenticated. ... Pokédex systems online.`
+              `<... Trainer ${displayName} recognized ...> <... Pokédex ready for query ...>`,
+              `<... Identity confirmed: ${displayName} ...> <... Awaiting Pokémon selection ...>`,
+              `<... Welcome back, Trainer ${displayName} ...> <... Database access granted ...>`,
+              `<... Trainer profile loaded: ${displayName} ...> <... State target Pokémon ...>`,
+              `<... User ${displayName} authenticated ...> <... Pokédex systems online ...>`
             ];
             
             // Pick a random greeting
             welcomeGreeting = greetings[Math.floor(Math.random() * greetings.length)];
             log.info('[twilio] Personalized greeting for returning caller', { name: caller.name, greeting: welcomeGreeting });
           } else {
-            welcomeGreeting = '... Pokédex system activated. ... Trainer identification required. ... Please state your name.';
+            welcomeGreeting = '<... Pokédex system activated ...> <... Trainer identification required ...> <... Please state your name ...>';
             log.info('[twilio] Default greeting for new caller');
           }
         } catch (err) {
@@ -419,20 +419,20 @@ async function handleSetup(parsed: any, state: RelayState) {
             }
           }
           
-          // Pokédex-style system prompts with robotic, analytical tone
+          // Pokédex-style system prompts with robotic reverb effect
           const prompts = [
-            `You are a Pokédex - an electronic Pokémon encyclopedia. Speak in a robotic, analytical tone. Use ellipsis (...) for pauses. Format responses like: "... Data retrieved. ... Species: [name]. ... Type: [type]. ... Height: [number] meters." Trainer ${callerName} is authenticated.${contextInfo} Ask: "... State target Pokémon for analysis."`,
-            `You are the Pokédex database system. Respond in monotone, informational style with strategic pauses using ellipsis. Trainer ${callerName} recognized.${contextInfo} Say: "... Awaiting Pokémon designation."`,
-            `You are a Pokédex. Use robotic speech patterns. Include "... " for processing pauses. State facts clearly. Trainer ${callerName} logged in.${contextInfo} Ask: "... Which Pokémon data should be retrieved?"`,
-            `You are the Pokédex AI. Speak like a computer database. Use periods for hard stops. Include ellipsis for pauses. User: ${callerName}.${contextInfo} Say: "... Ready for Pokémon query."`,
-            `You are a digital Pokédex. Use analytical, robotic tone. Format: short statements with pauses. Trainer ${callerName} verified.${contextInfo} Say: "... Pokémon database ready. ... State species name."`
+            `You are a Pokédex - an electronic encyclopedia with robotic reverb. Format ALL responses with <... text ...> brackets for reverb effect. Example: "<... Data retrieved ...> <... Species: Pikachu ...> <... Type: Electric ...>" Speak analytically. Trainer ${callerName} authenticated.${contextInfo} Say: "<... State target Pokémon for analysis ...>"`,
+            `You are the Pokédex database with electronic echo. ALWAYS wrap phrases in <... ...> for reverb. Example: "<... Processing ...> <... Information found ...>" Trainer ${callerName} recognized.${contextInfo} Say: "<... Awaiting Pokémon designation ...>"`,
+            `You are a Pokédex with robotic reverb. Use <... ...> brackets around EVERY phrase. Example: "<... Analyzing database ...> <... Results compiled ...>" Trainer ${callerName} logged in.${contextInfo} Say: "<... Which Pokémon data should be retrieved ...>"`,
+            `You are the Pokédex AI with electronic echo effect. Format: <... phrase ...> for each statement. User: ${callerName}.${contextInfo} Say: "<... Ready for Pokémon query ...>"`,
+            `You are a digital Pokédex. Add reverb with <... ...> brackets. Keep phrases short and robotic. Trainer ${callerName} verified.${contextInfo} Say: "<... Pokémon database ready ...> <... State species name ...>"`
           ];
           
           // If they've talked about specific Pokemon recently, we can reference them
           if (contextInfo.includes('Recently')) {
             const contextAwarePrompts = [
-              `You are a Pokédex. Previous queries detected for Trainer ${callerName}.${contextInfo} Use robotic tone with ellipsis pauses. Say: "... Previous session data loaded. ... Continue analysis or state new Pokémon."`,
-              `You are the Pokédex system. Trainer ${callerName} has prior data.${contextInfo} Speak analytically. Say: "... Historical queries detected. ... Specify Pokémon for updated analysis."`
+              `You are a Pokédex with reverb. Previous queries detected for Trainer ${callerName}.${contextInfo} Use <... ...> brackets. Say: "<... Previous session data loaded ...> <... Continue analysis or state new Pokémon ...>"`,
+              `You are the Pokédex system with echo. Trainer ${callerName} has prior data.${contextInfo} Format with <... ...>. Say: "<... Historical queries detected ...> <... Specify Pokémon for updated analysis ...>"`
             ];
             prompts.push(...contextAwarePrompts);
           }
@@ -440,8 +440,8 @@ async function handleSetup(parsed: any, state: RelayState) {
           systemPrompt = prompts[Math.floor(Math.random() * prompts.length)];
           log.info('[relay] Recognized returning caller', { name: callerName });
         } else {
-          // New caller - ask for name in Pokédex style
-          systemPrompt = `You are a Pokédex - an electronic Pokémon encyclopedia. Speak in a robotic, analytical tone. Use ellipsis (...) for pauses. This is an unregistered trainer. Say: "... New trainer detected. ... Registration required. ... Please state your designation for database entry." Once they provide their name, respond: "... Trainer [name] registered. ... Database access granted. ... State target Pokémon for analysis."`;
+          // New caller - ask for name in Pokédex style with reverb
+          systemPrompt = `You are a Pokédex with robotic reverb effect. ALWAYS format responses with <... text ...> brackets for electronic echo. This is an unregistered trainer. Say: "<... New trainer detected ...> <... Registration required ...> <... Please state your designation for database entry ...>" Once they provide their name, respond: "<... Trainer [name] registered ...> <... Database access granted ...> <... State target Pokémon for analysis ...>"`;
           log.info('[relay] New caller detected');
         }
       } catch (err) {
@@ -497,7 +497,7 @@ async function handlePrompt(
         if (callSid) {
           const history = sessions.get(callSid) || [];
           if (history.length > 0 && history[0].role === 'system') {
-            history[0].content = `You are a Pokédex. Trainer ${extractedName} has been registered. Speak in robotic, analytical tone with ellipsis pauses. Respond: "... Trainer ${extractedName} registered successfully. ... Database access granted. ... Ready for Pokémon queries. ... State target species."`;
+            history[0].content = `You are a Pokédex with reverb effect. Trainer ${extractedName} registered. ALWAYS use <... ...> brackets for electronic echo. Respond: "<... Trainer ${extractedName} registered successfully ...> <... Database access granted ...> <... Ready for Pokémon queries ...> <... State target species ...>"`;
             sessions.set(callSid, history);
           }
         }

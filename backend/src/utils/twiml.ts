@@ -6,10 +6,11 @@ type TwiMLOpts = {
 export function generateTwiML(opts: TwiMLOpts): string {
   const { websocketUrl, welcomeGreeting } = opts;
   
-  // ElevenLabs voice configuration for Pokédex sound
+  // ElevenLabs voice configuration for Pokédex sound with robotic reverb
   // Format: VOICE_ID-flash_v2_5-speed_stability_similarity
-  // 0.8 speed (slightly slower), 0.9 stability (monotone), 0.2 similarity (robotic)
-  const voiceConfig = 'Daniel-flash_v2_5-0.8_0.9_0.2';
+  // 0.75 speed (slower for robotic effect), 0.95 stability (very monotone), 0.15 similarity (more robotic)
+  // Note: Lower similarity and higher stability create more synthetic/robotic sound
+  const voiceConfig = 'Daniel-flash_v2_5-0.75_0.95_0.15';
   
   // Minimal TwiML that connects the call to ConversationRelay over WebSocket
   // https://www.twilio.com/docs/voice/conversationrelay
