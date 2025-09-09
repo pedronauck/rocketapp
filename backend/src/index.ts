@@ -6,6 +6,8 @@ import { getEnv } from './config/env';
 import { log } from './utils/log';
 import { registerTwilioRoutes } from './routes/twilio';
 import { registerStreamRoutes } from './routes/stream';
+import { registerAuthRoutes } from './routes/auth';
+import { registerPokemonRoutes } from './routes/pokemon';
 import { initDatabase } from './db/database';
 
 const app = new Hono();
@@ -53,6 +55,8 @@ const errorHandler: ErrorHandler = (err: Error, c: Context) => {
 
 registerTwilioRoutes(app, upgradeWebSocket);
 registerStreamRoutes(app);
+registerAuthRoutes(app);
+registerPokemonRoutes(app);
 
 app.onError(errorHandler);
 

@@ -19,6 +19,22 @@ export interface Conversation {
   ended_at?: number | null;
 }
 
+export interface Session {
+  id: string;
+  phone_number: string;
+  token: string;
+  expires_at: number;
+  created_at?: number;
+  last_used_at?: number;
+}
+
+export interface VerificationAttempt {
+  phone_number: string;
+  attempt_count: number;
+  last_attempt_at: number;
+  blocked_until?: number | null;
+}
+
 class CallDatabase {
   private db: Database;
   private getCallerStmt: any;
@@ -101,6 +117,19 @@ class CallDatabase {
         log.debug('[db] Saved caller name', { phoneNumber, name });
       } catch (error) {
         log.error('[db] Error saving caller name', { phoneNumber, error });
+      }
+    });
+  }
+
+  // Upsert caller (for auth)
+  async upsertCaller(phoneNumber: string, name: string | null): Promise<void> {
+    return new Promise((resolve, reject) => {
+      try {
+        this.upsertCallerStmt.run(phoneNumber, name);
+        resolve();
+      } catch (error) {
+        log.error('[db] Error upserting caller', { phoneNumber, error });
+        reject(error);
       }
     });
   }
@@ -280,6 +309,204 @@ class CallDatabase {
     }
   }
 
+  // Session management methods
+  async createSession(session: Session): Promise<void> {
+    return new Promise((resolve, reject) => {
+      try {
+        const stmt = this.db.prepare(`
+          INSERT INTO sessions (id, phone_number, token, expires_at, created_at, last_used_at)
+          VALUES (?, ?, ?, ?, unixepoch(), unixepoch())
+        `);
+        stmt.run(session.id, session.phone_number, session.token, session.expires_at);
+        resolve();
+      } catch (error) {
+        log.error('[db] Error creating session', { error });
+        reject(error);
+      }
+    });
+  }
+
+  async getSessionByToken(token: string): Promise<Session | null> {
+    return new Promise((resolve) => {
+      try {
+        const stmt = this.db.prepare(`
+          SELECT id, phone_number, token, expires_at, created_at, last_used_at
+          FROM sessions
+          WHERE token = ?
+        `);
+        const result = stmt.get(token) as Session | undefined;
+        resolve(result || null);
+      } catch (error) {
+        log.error('[db] Error getting session by token', { error });
+        resolve(null);
+      }
+    });
+  }
+
+  async updateSessionLastUsed(sessionId: string): Promise<void> {
+    return new Promise((resolve) => {
+      try {
+        const stmt = this.db.prepare(`
+          UPDATE sessions SET last_used_at = unixepoch() WHERE id = ?
+        `);
+        stmt.run(sessionId);
+        resolve();
+      } catch (error) {
+        log.error('[db] Error updating session last used', { error });
+        resolve();
+      }
+    });
+  }
+
+  async deleteSession(sessionId: string): Promise<void> {
+    return new Promise((resolve) => {
+      try {
+        const stmt = this.db.prepare('DELETE FROM sessions WHERE id = ?');
+        stmt.run(sessionId);
+        resolve();
+      } catch (error) {
+        log.error('[db] Error deleting session', { error });
+        resolve();
+      }
+    });
+  }
+
+  // Rate limiting methods
+  async getVerificationAttempts(phoneNumber: string): Promise<VerificationAttempt | null> {
+    return new Promise((resolve) => {
+      try {
+        const stmt = this.db.prepare(`
+          SELECT phone_number, attempt_count, last_attempt_at, blocked_until
+          FROM verification_attempts
+          WHERE phone_number = ?
+        `);
+        const result = stmt.get(phoneNumber) as VerificationAttempt | undefined;
+        resolve(result || null);
+      } catch (error) {
+        log.error('[db] Error getting verification attempts', { error });
+        resolve(null);
+      }
+    });
+  }
+
+  async incrementVerificationAttempts(phoneNumber: string): Promise<void> {
+    return new Promise((resolve) => {
+      try {
+        const stmt = this.db.prepare(`
+          INSERT INTO verification_attempts (phone_number, attempt_count, last_attempt_at)
+          VALUES (?, 1, unixepoch() * 1000)
+          ON CONFLICT(phone_number)
+          DO UPDATE SET 
+            attempt_count = attempt_count + 1,
+            last_attempt_at = unixepoch() * 1000
+        `);
+        stmt.run(phoneNumber);
+        resolve();
+      } catch (error) {
+        log.error('[db] Error incrementing verification attempts', { error });
+        resolve();
+      }
+    });
+  }
+
+  async resetVerificationAttempts(phoneNumber: string): Promise<void> {
+    return new Promise((resolve) => {
+      try {
+        const stmt = this.db.prepare('DELETE FROM verification_attempts WHERE phone_number = ?');
+        stmt.run(phoneNumber);
+        resolve();
+      } catch (error) {
+        log.error('[db] Error resetting verification attempts', { error });
+        resolve();
+      }
+    });
+  }
+
+  async blockVerificationAttempts(phoneNumber: string, blockedUntil: number): Promise<void> {
+    return new Promise((resolve) => {
+      try {
+        const stmt = this.db.prepare(`
+          UPDATE verification_attempts 
+          SET blocked_until = ? 
+          WHERE phone_number = ?
+        `);
+        stmt.run(blockedUntil, phoneNumber);
+        resolve();
+      } catch (error) {
+        log.error('[db] Error blocking verification attempts', { error });
+        resolve();
+      }
+    });
+  }
+
+  // Get all Pokemon queries for a user
+  async getPokemonQueries(phoneNumber: string, limit: number = 50, offset: number = 0): Promise<{
+    queries: Array<{
+      call_sid: string;
+      pokemon_names: string[];
+      timestamp: number;
+      duration?: number;
+    }>;
+    total: number;
+  }> {
+    return new Promise((resolve) => {
+      try {
+        // Get total count
+        const countStmt = this.db.prepare(`
+          SELECT COUNT(*) as total 
+          FROM conversations 
+          WHERE phone_number = ? AND ended_at IS NOT NULL
+        `);
+        const countResult = countStmt.get(phoneNumber) as { total: number };
+        
+        // Get paginated results
+        const stmt = this.db.prepare(`
+          SELECT call_sid, messages, started_at, ended_at
+          FROM conversations
+          WHERE phone_number = ? AND ended_at IS NOT NULL
+          ORDER BY started_at DESC
+          LIMIT ? OFFSET ?
+        `);
+        
+        const conversations = stmt.all(phoneNumber, limit, offset) as Conversation[];
+        
+        const queries = conversations.map(conv => {
+          const pokemonNames = new Set<string>();
+          
+          try {
+            const messages = JSON.parse(conv.messages) as SimpleMessage[];
+            
+            // Extract Pokemon names from messages
+            for (const msg of messages) {
+              // Look for Pokemon names in both user and assistant messages
+              const pokemonPattern = /\b(Pikachu|Charizard|Bulbasaur|Squirtle|Charmander|Wartortle|Blastoise|Caterpie|Metapod|Butterfree|Weedle|Kakuna|Beedrill|Pidgey|Pidgeotto|Pidgeot|Rattata|Raticate|Spearow|Fearow|Ekans|Arbok|Sandshrew|Sandslash|Nidoran|Nidorina|Nidoqueen|Nidorino|Nidoking|Clefairy|Clefable|Vulpix|Ninetales|Jigglypuff|Wigglytuff|Zubat|Golbat|Oddish|Gloom|Vileplume|Paras|Parasect|Venonat|Venomoth|Diglett|Dugtrio|Meowth|Persian|Psyduck|Golduck|Mankey|Primeape|Growlithe|Arcanine|Poliwag|Poliwhirl|Poliwrath|Abra|Kadabra|Alakazam|Machop|Machoke|Machamp|Bellsprout|Weepinbell|Victreebel|Tentacool|Tentacruel|Geodude|Graveler|Golem|Ponyta|Rapidash|Slowpoke|Slowbro|Magnemite|Magneton|Farfetch|Doduo|Dodrio|Seel|Dewgong|Grimer|Muk|Shellder|Cloyster|Gastly|Haunter|Gengar|Onix|Drowzee|Hypno|Krabby|Kingler|Voltorb|Electrode|Exeggcute|Exeggutor|Cubone|Marowak|Hitmonlee|Hitmonchan|Lickitung|Koffing|Weezing|Rhyhorn|Rhydon|Chansey|Tangela|Kangaskhan|Horsea|Seadra|Goldeen|Seaking|Staryu|Starmie|Scyther|Jynx|Electabuzz|Magmar|Pinsir|Tauros|Magikarp|Gyarados|Lapras|Ditto|Eevee|Vaporeon|Jolteon|Flareon|Porygon|Omanyte|Omastar|Kabuto|Kabutops|Aerodactyl|Snorlax|Articuno|Zapdos|Moltres|Dratini|Dragonair|Dragonite|Mewtwo|Mew)\b/gi;
+              const matches = msg.content.match(pokemonPattern);
+              if (matches) {
+                matches.forEach(match => pokemonNames.add(match));
+              }
+            }
+          } catch (err) {
+            log.debug('[db] Error parsing messages for Pokemon names', { err });
+          }
+          
+          return {
+            call_sid: conv.call_sid,
+            pokemon_names: Array.from(pokemonNames),
+            timestamp: conv.started_at || 0,
+            duration: (conv.ended_at && conv.started_at) 
+              ? conv.ended_at - conv.started_at 
+              : undefined
+          };
+        });
+        
+        resolve({ queries, total: countResult.total });
+      } catch (error) {
+        log.error('[db] Error getting Pokemon queries', { error });
+        resolve({ queries: [], total: 0 });
+      }
+    });
+  }
+
   // Close database connection
   close() {
     try {
@@ -290,6 +517,11 @@ class CallDatabase {
     } catch (error) {
       log.error('[db] Error closing database', error);
     }
+  }
+
+  // Expose database for demo seeding (development only)
+  getDbConnection() {
+    return this.db;
   }
 }
 

@@ -1,24 +1,36 @@
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { Toaster } from '@/components/ui/sonner';
+import { AuthProvider } from '@/contexts/auth-context';
+import { AuthGuard } from '@/components/auth/auth-guard';
+import { AuthPage } from '@/pages/auth-page';
+import { Dashboard } from '@/pages/dashboard';
 
 function App() {
   return (
-    <div className="min-h-screen bg-background">
-      <header className="border-b">
-        <div className="container mx-auto px-4 py-4 flex justify-between items-center">
-          <h1 className="text-2xl font-bold">Minha Loja</h1>
-          <div className="flex items-center gap-4">
+    <BrowserRouter>
+      <AuthProvider>
+        <div className="min-h-screen bg-background">
+          <div className="fixed top-4 right-4 z-50">
             <ThemeToggle />
           </div>
+
+          <Routes>
+            <Route 
+              path="/" 
+              element={
+                <AuthGuard fallback={<Navigate to="/auth" replace />}>
+                  <Dashboard />
+                </AuthGuard>
+              } 
+            />
+            <Route path="/auth" element={<AuthPage />} />
+          </Routes>
+
+          <Toaster richColors position="top-right" />
         </div>
-      </header>
-
-      <main>
-        <h1>Hello World</h1>
-      </main>
-
-      <Toaster richColors position="top-right" />
-    </div>
+      </AuthProvider>
+    </BrowserRouter>
   );
 }
 

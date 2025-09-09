@@ -37,6 +37,12 @@ const EnvSchema = z.object({
     .optional()
     .default(true),
   TWILIO_AUTH_TOKEN: z.string().optional(),
+  TWILIO_ACCOUNT_SID: z.string().optional(),
+  TWILIO_VERIFY_SERVICE_SID: z.string().optional(),
+  
+  // JWT Secret for session tokens
+  JWT_SECRET: z.string().min(32).default('your-secret-key-change-in-production'),
+  JWT_EXPIRES_IN: z.string().default('7d'),
 
   // Prompt
   SYSTEM_PROMPT: z.string().optional(),
