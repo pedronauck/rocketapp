@@ -128,15 +128,26 @@ class StreamCoordinator {
 
 // Singleton instance
 let streamCoordinator: StreamCoordinator | null = null;
+let cleanupTimer: Timer | null = null;
 
 export function getStreamCoordinator(): StreamCoordinator {
   if (!streamCoordinator) {
     streamCoordinator = new StreamCoordinator();
     
-    // Set up periodic cleanup
-    setInterval(() => {
-      streamCoordinator?.cleanup();
-    }, 30000); // Clean up every 30 seconds
+    // Set up periodic cleanup only once
+    if (!cleanupTimer) {
+      cleanupTimer = setInterval(() => {
+        streamCoordinator?.cleanup();
+      }, 30000); // Clean up every 30 seconds
+    }
   }
   return streamCoordinator;
 }
+
+// Cleanup on process exit
+process.on('beforeExit', () => {
+  if (cleanupTimer) {
+    clearInterval(cleanupTimer);
+    cleanupTimer = null;
+  }
+});

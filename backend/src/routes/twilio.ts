@@ -256,8 +256,17 @@ function makeRelayHandlerFactory(env: ReturnType<typeof getEnv>) {
 function safeParseMessage(event: MessageEvent<WSMessageReceive>) {
   const data = typeof event.data === 'string' ? event.data : '';
   if (!data) return null;
-  const raw = JSON.parse(data);
-  return parseKnownMessage(raw) || raw;
+  
+  try {
+    const raw = JSON.parse(data);
+    return parseKnownMessage(raw) || raw;
+  } catch (err) {
+    log.error('[relay] Failed to parse WebSocket message', {
+      error: (err as any)?.message || String(err),
+      data: data.slice(0, 100), // Log first 100 chars for debugging
+    });
+    return null;
+  }
 }
 
 function extractNameFromResponse(text: string): string | null {
@@ -292,6 +301,12 @@ type RelayState = {
   callSidRef: () => string | null;
   setCallSid: (v: string | null) => void;
   phoneNumber: string | null;
+  // Additional state properties
+  callerName?: string;
+  isNewCaller?: boolean;
+  nameExtracted?: boolean;
+  pendingInterrupt?: boolean;
+  ttsStoppedByUser?: boolean;
 };
 type AbortRef = { get: () => any; set: (a: any) => void };
 
@@ -470,15 +485,15 @@ async function handleSetup(parsed: any, state: RelayState) {
     );
     
     // Store caller info in state for later use
-    (state as any).callerName = callerName;
-    (state as any).isNewCaller = !callerName;
+    state.callerName = callerName;
+    state.isNewCaller = !callerName;
   }
   
   log.info('[relay] setup', { 
     connectionId: state.connectionId, 
     callSid,
     phoneNumber: state.phoneNumber,
-    isNewCaller: !(state as any).callerName
+    isNewCaller: !state.callerName
   });
 }
 
@@ -515,10 +530,10 @@ async function handlePrompt(
       });
       
       // Clear interrupt flag
-      (state as any).pendingInterrupt = false;
+      state.pendingInterrupt = false;
       
       // Mark that we should skip sending remaining chunks to client
-      (state as any).ttsStoppedByUser = true;
+      state.ttsStoppedByUser = true;
       return;
     }
     
@@ -538,12 +553,12 @@ async function handlePrompt(
     });
     
     // Clear interrupt flag
-    (state as any).pendingInterrupt = false;
+    state.pendingInterrupt = false;
     return; // Don't process now, will be handled after current stream
   }
   
   // Clear interrupt flag
-  (state as any).pendingInterrupt = false;
+  state.pendingInterrupt = false;
   
   // Process the prompt immediately
   await processPrompt(text, ws, state, abortRef, isDebug);
@@ -561,14 +576,14 @@ async function processPrompt(
   const messageQueue = getMessageQueue();
   
   // Check if this is a new caller and try to extract their name
-  if ((state as any).isNewCaller && !(state as any).nameExtracted) {
+  if (state.isNewCaller && !state.nameExtracted) {
     const extractedName = extractNameFromResponse(text);
     if (extractedName && state.phoneNumber) {
       try {
         const db = getDatabase();
         await db.saveCallerName(state.phoneNumber, extractedName);
-        (state as any).callerName = extractedName;
-        (state as any).nameExtracted = true;
+        state.callerName = extractedName;
+        state.nameExtracted = true;
         log.info('[relay] Extracted and saved caller name', { 
           name: extractedName, 
           phoneNumber: state.phoneNumber 
@@ -725,7 +740,7 @@ function handleInterrupt(state: RelayState, abortRef: AbortRef, ws: WSContext) {
   // Check if stream is active
   if (callSid && streamCoordinator.isStreamActive(callSid)) {
     // Store interrupt flag in state to check with next prompt
-    (state as any).pendingInterrupt = true;
+    state.pendingInterrupt = true;
     
     log.info('[relay] interrupt signal received (waiting for prompt)', {
       connectionId: state.connectionId,
@@ -830,7 +845,7 @@ async function sendStream(ws: WSContext, stream: AsyncIterable<string>, state?: 
     fullResponse += chunk;
     
     // Check if TTS has been stopped by user
-    if (state && (state as any).ttsStoppedByUser) {
+    if (state && state.ttsStoppedByUser) {
       // Continue consuming the stream for context, but don't send to client
       continue;
     }
@@ -839,13 +854,13 @@ async function sendStream(ws: WSContext, stream: AsyncIterable<string>, state?: 
   }
   
   // Only send the final message if TTS wasn't stopped
-  if (!state || !(state as any).ttsStoppedByUser) {
+  if (!state || !state.ttsStoppedByUser) {
     ws.send(JSON.stringify({ type: 'text', token: '', last: true }));
   }
   
   // Clear the TTS stopped flag for next response
-  if (state && (state as any).ttsStoppedByUser) {
-    (state as any).ttsStoppedByUser = false;
+  if (state && state.ttsStoppedByUser) {
+    state.ttsStoppedByUser = false;
   }
   
   return { chunks, chars, fullResponse };
