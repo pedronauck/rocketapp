@@ -11,17 +11,21 @@ export function generateTwiML(opts: TwiMLOpts): string {
     ? ` welcomeGreeting="${escapeXml(welcomeGreeting)}"`
     : '';
 
-  // ConversationRelay with Amazon Polly voice
-  // Use Matthew standard voice for robotic sound (without "Polly" prefix for ConversationRelay)
-  // Standard voices sound more robotic than Neural or Generative voices
+  // ConversationRelay with Amazon Polly voice for robotic sound
+  // Using Matthew standard voice - more robotic than Neural/Generative voices
   
   return (
     `<?xml version="1.0" encoding="UTF-8"?>` +
     `<Response>` +
     `<Connect>` +
     `<ConversationRelay url="${escapeXml(websocketUrl)}"` +
+    ` ttsProvider="Amazon"` +
     ` voice="Matthew"` +
-    `${greetingAttr}/>` +
+    ` language="en-US"` +
+    `${greetingAttr}` +
+    ` welcomeGreetingInterruptible="false"` +
+    ` dtmfDetection="true"` +
+    ` interruptible="true"/>` +
     `</Connect>` +
     `</Response>`
   );
