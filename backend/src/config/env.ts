@@ -27,6 +27,9 @@ const EnvSchema = z.object({
 
   // Prompt
   SYSTEM_PROMPT: z.string().optional(),
+
+  // Database
+  DATABASE_PATH: z.string().default('./data/calls.db'),
 });
 
 type Env = z.infer<typeof EnvSchema>;
