@@ -310,7 +310,7 @@ async function routeRelayMessage(args: {
     case 'prompt':
       return handlePrompt(parsed, ws, state, abortRef, isDebug);
     case 'interrupt':
-      return handleInterrupt(state, abortRef);
+      return handleInterrupt(state, abortRef, ws);
     case 'ping':
       ws.send(JSON.stringify({ type: 'pong' }));
       return;
@@ -496,8 +496,32 @@ async function handlePrompt(
   const streamCoordinator = getStreamCoordinator();
   const messageQueue = getMessageQueue();
   
+  // Check if this is a stop command
+  const isStopCommand = text.toLowerCase().trim() === 'stop' || 
+                       text.toLowerCase().includes('stop talking') ||
+                       text.toLowerCase().includes('stop speaking');
+  
   // Check if stream is currently active
   if (callSid && streamCoordinator.isStreamActive(callSid)) {
+    if (isStopCommand) {
+      // User said "stop" - send stop signal to client to halt TTS
+      // but don't abort the stream (let it finish internally for context)
+      ws.send(JSON.stringify({ type: 'stop' }));
+      
+      log.info('[relay] TTS stopped by user command (stream continues internally)', {
+        connectionId: state.connectionId,
+        callSid,
+        command: text,
+      });
+      
+      // Clear interrupt flag
+      (state as any).pendingInterrupt = false;
+      
+      // Mark that we should skip sending remaining chunks to client
+      (state as any).ttsStoppedByUser = true;
+      return;
+    }
+    
     // Queue the message instead of processing immediately
     messageQueue.enqueue(callSid, {
       type: 'prompt',
@@ -512,8 +536,14 @@ async function handlePrompt(
       textPreview: text.slice(0, 50),
       pendingCount: messageQueue.getPendingCount(callSid),
     });
+    
+    // Clear interrupt flag
+    (state as any).pendingInterrupt = false;
     return; // Don't process now, will be handled after current stream
   }
+  
+  // Clear interrupt flag
+  (state as any).pendingInterrupt = false;
   
   // Process the prompt immediately
   await processPrompt(text, ws, state, abortRef, isDebug);
@@ -587,7 +617,7 @@ async function processPrompt(
       }, 5000); // Update every 5 seconds
     }
     
-    const { chunks, chars, fullResponse } = await sendStream(ws, stream);
+    const { chunks, chars, fullResponse } = await sendStream(ws, stream, state);
     
     if (activityTimer) clearInterval(activityTimer);
     
@@ -688,27 +718,24 @@ async function processQueuedMessages(
   }
 }
 
-function handleInterrupt(state: RelayState, abortRef: AbortRef) {
+function handleInterrupt(state: RelayState, abortRef: AbortRef, ws: WSContext) {
   const callSid = state.callSidRef();
   const streamCoordinator = getStreamCoordinator();
-  const messageQueue = getMessageQueue();
   
   // Check if stream is active
   if (callSid && streamCoordinator.isStreamActive(callSid)) {
-    // Queue the interrupt instead of aborting
-    messageQueue.enqueue(callSid, {
-      type: 'interrupt',
-      content: 'USER_INTERRUPT',
+    // Store interrupt flag in state to check with next prompt
+    (state as any).pendingInterrupt = true;
+    
+    log.info('[relay] interrupt signal received (waiting for prompt)', {
+      connectionId: state.connectionId,
       callSid,
     });
     
-    log.info('[relay] interrupt queued (stream active)', {
-      connectionId: state.connectionId,
-      callSid,
-      pendingCount: messageQueue.getPendingCount(callSid),
-    });
+    // Do NOT abort the stream - let it continue
+    // The next prompt message will be queued automatically
   } else {
-    // No active stream, handle interrupt normally (shouldn't happen often)
+    // No active stream, handle interrupt normally
     if (abortRef.get()) abortRef.get().abort('interrupt');
     log.info('[relay] interrupt (no active stream)', {
       connectionId: state.connectionId,
@@ -793,7 +820,7 @@ function logStreamStart(
   });
 }
 
-async function sendStream(ws: WSContext, stream: AsyncIterable<string>) {
+async function sendStream(ws: WSContext, stream: AsyncIterable<string>, state?: RelayState) {
   let chunks = 0;
   let chars = 0;
   let fullResponse = '';
@@ -801,9 +828,26 @@ async function sendStream(ws: WSContext, stream: AsyncIterable<string>) {
     chunks++;
     chars += chunk.length;
     fullResponse += chunk;
+    
+    // Check if TTS has been stopped by user
+    if (state && (state as any).ttsStoppedByUser) {
+      // Continue consuming the stream for context, but don't send to client
+      continue;
+    }
+    
     ws.send(JSON.stringify({ type: 'text', token: chunk, last: false }));
   }
-  ws.send(JSON.stringify({ type: 'text', token: '', last: true }));
+  
+  // Only send the final message if TTS wasn't stopped
+  if (!state || !(state as any).ttsStoppedByUser) {
+    ws.send(JSON.stringify({ type: 'text', token: '', last: true }));
+  }
+  
+  // Clear the TTS stopped flag for next response
+  if (state && (state as any).ttsStoppedByUser) {
+    (state as any).ttsStoppedByUser = false;
+  }
+  
   return { chunks, chars, fullResponse };
 }
 
