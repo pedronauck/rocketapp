@@ -11,8 +11,10 @@ export function generateTwiML(opts: TwiMLOpts): string {
     ? ` welcomeGreeting="${escapeXml(welcomeGreeting)}"`
     : '';
 
-  // Use ElevenLabs with a professional voice
-  const voiceConfig = 'UgBBYS2sOqTuMpoF3BR0'; // Clear, professional ElevenLabs voice
+  // Use ElevenLabs with Pokédex robotic voice settings
+  // Format: VOICE_ID-model-speed_stability_similarity
+  // Speed: 0.8 (slower), Stability: 0.9 (monotone), Similarity: 0.2 (robotic)
+  const voiceConfig = 'UgBBYS2sOqTuMpoF3BR0-flash_v2_5-0.8_0.9_0.2';
 
   return (
     `<?xml version="1.0" encoding="UTF-8"?>` +
