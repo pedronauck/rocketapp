@@ -16,6 +16,8 @@ import { getRandomThinkingMessage } from '../utils/thinking-messages';
 import type { Context } from 'hono';
 import { getDatabase } from '../db/database';
 import { getBatchWriter } from '../services/batch-writer';
+import { getMessageQueue } from '../services/message-queue';
+import { getStreamCoordinator } from '../services/stream-coordinator';
 
 // Helpers
 function resolveRelayWsUrl(req: Request): string {
@@ -217,6 +219,18 @@ function makeRelayHandlerFactory(env: ReturnType<typeof getEnv>) {
       onClose() {
         if (currentAbort) currentAbort.abort('ws-closed');
         currentAbort = null;
+
+        // Clean up message queue and stream coordinator
+        if (callSid) {
+          const messageQueue = getMessageQueue();
+          const streamCoordinator = getStreamCoordinator();
+          
+          // Clear any pending messages
+          messageQueue.clear(callSid);
+          
+          // Clear stream state
+          streamCoordinator.clearCall(callSid);
+        }
 
         // Mark conversation as ended using batch writer
         if (callSid && phoneNumber) {
@@ -478,6 +492,44 @@ async function handlePrompt(
   const text: string = parsed?.voicePrompt || parsed?.text || '';
   if (!text) return;
   
+  const callSid = state.callSidRef();
+  const streamCoordinator = getStreamCoordinator();
+  const messageQueue = getMessageQueue();
+  
+  // Check if stream is currently active
+  if (callSid && streamCoordinator.isStreamActive(callSid)) {
+    // Queue the message instead of processing immediately
+    messageQueue.enqueue(callSid, {
+      type: 'prompt',
+      content: text,
+      voicePrompt: parsed?.voicePrompt,
+      callSid,
+    });
+    
+    log.info('[relay] prompt queued (stream active)', {
+      connectionId: state.connectionId,
+      callSid,
+      textPreview: text.slice(0, 50),
+      pendingCount: messageQueue.getPendingCount(callSid),
+    });
+    return; // Don't process now, will be handled after current stream
+  }
+  
+  // Process the prompt immediately
+  await processPrompt(text, ws, state, abortRef, isDebug);
+}
+
+async function processPrompt(
+  text: string,
+  ws: WSContext,
+  state: RelayState,
+  abortRef: AbortRef,
+  isDebug: boolean
+) {
+  const callSid = state.callSidRef();
+  const streamCoordinator = getStreamCoordinator();
+  const messageQueue = getMessageQueue();
+  
   // Check if this is a new caller and try to extract their name
   if ((state as any).isNewCaller && !(state as any).nameExtracted) {
     const extractedName = extractNameFromResponse(text);
@@ -493,7 +545,6 @@ async function handlePrompt(
         });
         
         // Update the session's system prompt to reflect we now know their name
-        const callSid = state.callSidRef();
         if (callSid) {
           const history = sessions.get(callSid) || [];
           if (history.length > 0 && history[0].role === 'system') {
@@ -505,6 +556,11 @@ async function handlePrompt(
         log.error('[relay] Failed to save caller name', err);
       }
     }
+  }
+  
+  // Register stream start
+  if (callSid) {
+    streamCoordinator.registerStreamStart(callSid);
   }
   
   startAbort(abortRef);
@@ -522,24 +578,35 @@ async function handlePrompt(
 
     const { stream, usedMessages } = await getTextStream(state, text, abortRef);
     logStreamStart(isDebug, state, turnId, usedMessages);
+    
+    // Update activity during streaming
+    let activityTimer: Timer | null = null;
+    if (callSid) {
+      activityTimer = setInterval(() => {
+        streamCoordinator.updateActivity(callSid);
+      }, 5000); // Update every 5 seconds
+    }
+    
     const { chunks, chars, fullResponse } = await sendStream(ws, stream);
     
+    if (activityTimer) clearInterval(activityTimer);
+    
     // Save assistant response to session and database
-    if (state.callSidRef() && fullResponse) {
-      const history = sessions.get(state.callSidRef()!) || [];
+    if (callSid && fullResponse) {
+      const history = sessions.get(callSid) || [];
       const withAssistant: SimpleMessage[] = [
         ...history,
         { role: 'assistant', content: fullResponse },
       ];
-      sessions.set(state.callSidRef()!, withAssistant);
+      sessions.set(callSid, withAssistant);
       
       // Use batch writer for efficient database updates
       if (state.phoneNumber) {
         try {
           const batchWriter = getBatchWriter();
-          batchWriter.enqueue(state.callSidRef()!, withAssistant, false);
+          batchWriter.enqueue(callSid, withAssistant, false);
           log.debug('[relay] Queued conversation update with assistant response', {
-            callSid: state.callSidRef(),
+            callSid,
             messageCount: withAssistant.length,
           });
         } catch (err) {
@@ -549,19 +616,105 @@ async function handlePrompt(
     }
     
     logStreamFinish(state, turnId, startedAt, chunks, chars);
+    
+    // Register stream end
+    if (callSid) {
+      streamCoordinator.registerStreamEnd(callSid);
+      
+      // Process queued messages after stream completes
+      await processQueuedMessages(ws, state, abortRef, isDebug);
+    }
   } catch (err) {
     logStreamError(state, turnId, startedAt, err);
+    // Register stream end even on error
+    if (callSid) {
+      streamCoordinator.registerStreamEnd(callSid);
+    }
   } finally {
     if (timer) clearTimeout(timer);
   }
 }
 
-function handleInterrupt(state: RelayState, abortRef: AbortRef) {
-  if (abortRef.get()) abortRef.get().abort('interrupt');
-  log.info('[relay] interrupt', {
-    connectionId: state.connectionId,
-    callSid: state.callSidRef(),
+async function processQueuedMessages(
+  ws: WSContext,
+  state: RelayState,
+  abortRef: AbortRef,
+  isDebug: boolean
+) {
+  const callSid = state.callSidRef();
+  if (!callSid) return;
+  
+  const messageQueue = getMessageQueue();
+  const streamCoordinator = getStreamCoordinator();
+  
+  // Check if there are pending messages
+  if (!messageQueue.hasPending(callSid)) {
+    log.debug('[relay] No queued messages to process', { callSid });
+    return;
+  }
+  
+  // Get next message from queue
+  const nextMessage = messageQueue.getNext(callSid);
+  if (!nextMessage) return;
+  
+  log.info('[relay] Processing queued message', {
+    callSid,
+    messageId: nextMessage.id,
+    type: nextMessage.type,
+    remainingCount: messageQueue.getPendingCount(callSid) - 1,
   });
+  
+  // Mark message as processed
+  messageQueue.markProcessed(callSid, nextMessage.id);
+  
+  // Process based on message type
+  if (nextMessage.type === 'prompt' && nextMessage.content) {
+    // Add a small delay for natural conversation flow
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
+    // Process the queued prompt
+    await processPrompt(nextMessage.content, ws, state, abortRef, isDebug);
+  } else if (nextMessage.type === 'interrupt') {
+    // For queued interrupts, we might want to acknowledge them differently
+    log.info('[relay] Skipping queued interrupt (already handled by queuing)', {
+      callSid,
+      messageId: nextMessage.id,
+    });
+    
+    // Continue processing other queued messages
+    if (messageQueue.hasPending(callSid)) {
+      await processQueuedMessages(ws, state, abortRef, isDebug);
+    }
+  }
+}
+
+function handleInterrupt(state: RelayState, abortRef: AbortRef) {
+  const callSid = state.callSidRef();
+  const streamCoordinator = getStreamCoordinator();
+  const messageQueue = getMessageQueue();
+  
+  // Check if stream is active
+  if (callSid && streamCoordinator.isStreamActive(callSid)) {
+    // Queue the interrupt instead of aborting
+    messageQueue.enqueue(callSid, {
+      type: 'interrupt',
+      content: 'USER_INTERRUPT',
+      callSid,
+    });
+    
+    log.info('[relay] interrupt queued (stream active)', {
+      connectionId: state.connectionId,
+      callSid,
+      pendingCount: messageQueue.getPendingCount(callSid),
+    });
+  } else {
+    // No active stream, handle interrupt normally (shouldn't happen often)
+    if (abortRef.get()) abortRef.get().abort('interrupt');
+    log.info('[relay] interrupt (no active stream)', {
+      connectionId: state.connectionId,
+      callSid,
+    });
+  }
 }
 
 function startAbort(abortRef: AbortRef) {
