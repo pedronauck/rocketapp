@@ -58,27 +58,35 @@ Currently, the application treats every call as a new interaction with no memory
 
 ---
 
-### Phase 2: Phone Number Extraction (Priority: HIGH)
+### Phase 2: Phone Number Extraction (Priority: HIGH) ✅ COMPLETED
 **Goal**: Capture caller phone numbers from Twilio requests
 
 #### Deliverables
-- [ ] Extract phone number from POST `/twilio/voice` request body
-- [ ] Pass phone number through WebSocket connection
-- [ ] Store phone number in relay handler state
+- [x] Extract phone number from POST `/twiml` request body
+- [x] Pass phone number through WebSocket connection
+- [x] Store phone number in relay handler state
 
-#### Technical Approach
+#### Implementation Summary
+Implemented extraction from `/twiml` POST endpoint and passed phone number as WebSocket URL query parameter (`?phone=+1234567890`). This approach ensures the phone number is available immediately when the WebSocket connection opens.
+
 ```typescript
-// Extract from Twilio POST body
+// Actual implementation:
+// 1. Extract from POST /twiml
 const formData = await c.req.parseBody();
 const phoneNumber = formData.From; // E.164 format
 
-// Pass via WebSocket setup message
+// 2. Append to WebSocket URL
+wsUrl += `?phone=${encodeURIComponent(phoneNumber)}`;
+
+// 3. Extract in WebSocket handler
+const url = new URL(c.req.url);
+phoneNumber = url.searchParams.get('phone');
 ```
 
 #### Acceptance Criteria
-- Phone number successfully extracted from Twilio webhook
-- Phone number available in WebSocket relay handler
-- No impact on connection setup time
+- ✅ Phone number successfully extracted from Twilio webhook
+- ✅ Phone number available in WebSocket relay handler
+- ✅ No impact on connection setup time
 
 ---
 
@@ -267,12 +275,12 @@ CREATE INDEX idx_conversations_phone ON conversations(phone_number);
 
 ### MVP Completion
 - [x] Database setup and initialization working
-- [ ] Phone numbers extracted from Twilio webhooks
+- [x] Phone numbers extracted from Twilio webhooks
 - [ ] Returning callers receive personalized greetings
 - [ ] First-time callers asked for their name
 - [ ] Names successfully captured and stored
-- [ ] Conversations persisted to database
-- [ ] No performance degradation (< 500ms first response)
+- [x] Conversations persisted to database
+- [x] No performance degradation (< 500ms first response)
 - [ ] System handles concurrent calls
 
 ### Quality Metrics
