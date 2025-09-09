@@ -26,7 +26,15 @@ export function generateTwiML(opts: TwiMLOpts): string {
     `${greetingAttr}` +
     ` welcomeGreetingInterruptible="false"` +
     ` dtmfDetection="true"` +
-    ` interruptible="true"/>` +
+    ` interruptible="true"` +
+    ` speechModel="eleven_turbo_v2_5"` +
+    ` optimizeLatency="4">` +
+    `<TtsAudioEffects>` +
+    `<Effect type="reverb" roomSize="0.8" damping="0.3" wetLevel="0.35" dryLevel="0.65"/>` +
+    `<Effect type="echo" delay="0.15" decay="0.4" wetLevel="0.25" dryLevel="0.75"/>` +
+    `<Effect type="pitch" shift="-0.1"/>` +
+    `</TtsAudioEffects>` +
+    `</ConversationRelay>` +
     `</Connect>` +
     `</Response>`
   );
