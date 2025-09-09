@@ -9,13 +9,12 @@ export function generateTwiML(opts: TwiMLOpts): string {
   // Build ConversationRelay attributes carefully
   let attributes = `url="${escapeXml(websocketUrl)}"`;
 
-  // Add TTS configuration for Google with robotic-sounding voice
-  // Using Standard voice (more robotic than WaveNet) with adjusted pitch
+  // Add TTS configuration for Google with US male voice and higher pitch
   attributes += ` ttsProvider="Google"`;
-  attributes += ` voice="en-GB-Standard-C"`; // Male voice with deeper tone
-  attributes += ` language="en-GB"`;
+  attributes += ` voice="en-US-Standard-B"`; // US male voice
+  attributes += ` language="en-US"`;
   attributes += ` speechRate="1.2"`; // Slightly faster for robotic effect
-  attributes += ` pitch="-2.0"`; // Lower pitch for more robotic sound
+  attributes += ` pitch="2.0"`; // Higher pitch for robotic sound
 
   // Add welcome greeting if provided
   if (welcomeGreeting) {
