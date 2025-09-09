@@ -36,7 +36,7 @@ export function registerTwilioRoutes(app: Hono, upgradeWebSocket: UpgradeWS) {
 }
 
 function registerTwiMLRoute(app: Hono, env: ReturnType<typeof getEnv>) {
-  app.get('/twiml', async (c) => respondWithTwiML(c, env));
+  app.post('/twiml', async (c) => respondWithTwiML(c, env));
 }
 
 function registerVoiceRoute(app: Hono, env: ReturnType<typeof getEnv>) {
