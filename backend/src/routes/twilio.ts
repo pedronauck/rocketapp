@@ -2,15 +2,23 @@ import type { Hono } from 'hono';
 import type { UpgradeWebSocket, WSContext, WSMessageReceive } from 'hono/ws';
 import { nanoid } from 'nanoid';
 import { generateTwiML } from '../utils/twiml';
-import { streamAnswer, streamAnswerWithMessages, type SimpleMessage } from '../services/ai';
+import {
+  streamAnswer,
+  streamAnswerWithMessages,
+  type SimpleMessage,
+} from '../services/ai';
 import { validateTwilioSignature } from '../utils/twilio-signature';
-
+import { getEnv } from '../config/env';
+import { log } from '../utils/log';
+import { sessions } from '../services/session';
+import { parseKnownMessage } from '../types/relay';
+import type { Context } from 'hono';
 
 // Helpers
 function resolveRelayWsUrl(req: Request): string {
-  const envUrl = process.env.RELAY_WS_URL;
+  const env = getEnv();
+  const envUrl = env.RELAY_WS_URL;
   if (envUrl) return envUrl;
-
   // Derive from incoming request host; default to ws for local
   const url = new URL(req.url);
   const scheme = url.protocol === 'https:' ? 'wss' : 'ws';
@@ -21,233 +29,320 @@ function resolveRelayWsUrl(req: Request): string {
 type UpgradeWS = UpgradeWebSocket;
 
 export function registerTwilioRoutes(app: Hono, upgradeWebSocket: UpgradeWS) {
-  // Simple in-memory session store keyed by callSid
-  const sessions = new Map<string, SimpleMessage[]>();
-  const LOG_LEVEL = (process.env.LOG_LEVEL || 'info').toLowerCase();
-  const isDebug = LOG_LEVEL === 'debug' || LOG_LEVEL === 'trace';
+  const env = getEnv();
+  registerTwiMLRoute(app, env);
+  registerVoiceRoute(app, env);
+  registerRelayRoutes(app, upgradeWebSocket, env);
+}
 
-  // GET TwiML endpoint aligning with Twilio tutorial
-  app.get('/twiml', async (c) => {
-    const domain = process.env.NGROK_URL; // e.g., abcd1234.ngrok-free.app (no scheme)
-    const wsUrl = domain
-      ? `wss://${domain}/ws`
-      : resolveRelayWsUrl(c.req.raw).replace('/twilio/relay', '/ws');
+function registerTwiMLRoute(app: Hono, env: ReturnType<typeof getEnv>) {
+  app.get('/twiml', async (c) => respondWithTwiML(c, env));
+}
 
-    const welcome =
-      process.env.RELAY_WELCOME_GREETING ||
-      'Hi! I am a voice assistant powered by Twilio. Ask me anything!';
-
-    const xml = generateTwiML({ websocketUrl: wsUrl, welcomeGreeting: welcome });
-    console.log('[twilio] GET /twiml -> replying TwiML with ws URL');
+function registerVoiceRoute(app: Hono, env: ReturnType<typeof getEnv>) {
+  app.post('/twilio/voice', async (c) => {
+    const ok = await validateSignatureIfConfigured(c, env);
+    if (!ok)
+      return c.json(
+        { error: 'unauthorized', message: 'Invalid Twilio signature' },
+        401
+      );
+    const wsUrl = resolveRelayWsUrl(c.req.raw);
+    const xml = generateTwiML({
+      websocketUrl: wsUrl,
+      welcomeGreeting: env.RELAY_WELCOME_GREETING,
+    });
+    log.info('[twilio] POST /twilio/voice -> replying TwiML with ws URL');
     return c.text(xml, 200, { 'Content-Type': 'text/xml' });
   });
-  // Webhook that Twilio hits for an incoming call
-  app.post('/twilio/voice', async (c) => {
-    // Optional Twilio signature validation
-    const authToken = process.env.TWILIO_AUTH_TOKEN;
-    if (authToken) {
-      let formParams: Record<string, string | Blob | File | undefined> | undefined;
-      const contentType = c.req.header('content-type') || '';
-      // Only parse form body for application/x-www-form-urlencoded
-      if (contentType.includes('application/x-www-form-urlencoded')) {
-        formParams = (await c.req.parseBody()) as Record<string, string | Blob | File | undefined>;
-      }
-      const reqUrl = new URL(c.req.url);
-      const host = c.req.header('host') || reqUrl.host;
-      const protoHdr = c.req.header('x-forwarded-proto');
-      const proto = (protoHdr || reqUrl.protocol.replace(':', '')).toLowerCase();
-      const urlForSig = `${proto}://${host}${reqUrl.pathname}${reqUrl.search}`;
+}
 
-      const ok = validateTwilioSignature({
-        url: urlForSig,
-        method: c.req.method,
-        headers: c.req.raw.headers,
-        formParams,
-        authToken,
-      });
-      if (!ok) {
-        return c.json({ error: 'unauthorized', message: 'Invalid Twilio signature' }, 401);
-      }
-    }
-    const wsUrl = resolveRelayWsUrl(c.req.raw);
+function registerRelayRoutes(
+  app: Hono,
+  upgradeWebSocket: UpgradeWS,
+  env: ReturnType<typeof getEnv>
+) {
+  const handlerFactory = makeRelayHandlerFactory(env);
+  app.get('/ws', upgradeWebSocket(handlerFactory));
+  app.get('/twilio/relay', upgradeWebSocket(handlerFactory));
+}
 
-    const welcome =
-      process.env.RELAY_WELCOME_GREETING ||
-      'Hi! Welcome to the Pokédex Call Center. Ask me about any Pokémon!';
-
-    const xml = generateTwiML({ websocketUrl: wsUrl, welcomeGreeting: welcome });
-    console.log('[twilio] POST /twilio/voice -> replying TwiML with ws URL');
-    return c.text(xml, 200, {
-      'Content-Type': 'text/xml',
-    });
+async function respondWithTwiML(c: Context, env: ReturnType<typeof getEnv>) {
+  const domain = env.NGROK_URL;
+  const wsUrl = domain
+    ? `wss://${domain}/ws`
+    : resolveRelayWsUrl(c.req.raw).replace('/twilio/relay', '/ws');
+  const xml = generateTwiML({
+    websocketUrl: wsUrl,
+    welcomeGreeting: env.RELAY_WELCOME_GREETING,
   });
+  log.info('[twilio] respondWithTwiML -> replying TwiML with ws URL');
+  return c.text(xml, 200, { 'Content-Type': 'text/xml' });
+}
 
-  // Twilio Conversation Relay WebSocket endpoint
-  const makeRelayHandler = () =>
-    upgradeWebSocket((_c: unknown) => {
-      // Per-connection abort controller for streaming tasks
-      let currentAbort: any = null;
-      let callSid: string | null = null;
-      const connectionId = nanoid(6);
+async function validateSignatureIfConfigured(
+  c: Context,
+  env: ReturnType<typeof getEnv>
+) {
+  const authToken = env.TWILIO_AUTH_TOKEN;
+  if (!authToken) return true;
+  const contentType = c.req.header('content-type') || '';
+  const formParams = contentType.includes('application/x-www-form-urlencoded')
+    ? ((await c.req.parseBody()) as Record<
+        string,
+        string | Blob | File | undefined
+      >)
+    : undefined;
+  const reqUrl = new URL(c.req.url);
+  const host = c.req.header('host') || reqUrl.host;
+  const protoHdr = c.req.header('x-forwarded-proto');
+  const proto = (protoHdr || reqUrl.protocol.replace(':', '')).toLowerCase();
+  const urlForSig = `${proto}://${host}${reqUrl.pathname}${reqUrl.search}`;
+  return validateTwilioSignature({
+    url: urlForSig,
+    method: c.req.method,
+    headers: c.req.raw.headers,
+    formParams,
+    authToken,
+  });
+}
 
-      return {
-        onOpen(_evt: Event, _ws: WSContext) {
-          console.log('[relay] open', { connectionId });
-        },
-        async onMessage(event: MessageEvent<WSMessageReceive>, ws: WSContext) {
-          try {
-            const data = typeof event.data === 'string' ? event.data : '';
-            if (!data) return;
+function makeRelayHandlerFactory(env: ReturnType<typeof getEnv>) {
+  const isDebug = env.LOG_LEVEL === 'debug' || env.LOG_LEVEL === 'trace';
+  return (_c: unknown) => {
+    let currentAbort: any = null;
+    let callSid: string | null = null;
+    const connectionId = nanoid(6);
+    return {
+      onOpen() {
+        log.info('[relay] open', { connectionId });
+      },
+      async onMessage(event: MessageEvent<WSMessageReceive>, ws: WSContext) {
+        try {
+          const parsed = safeParseMessage(event);
+          if (!parsed) return;
+          await routeRelayMessage({
+            parsed,
+            ws,
+            state: {
+              connectionId,
+              callSidRef: () => callSid,
+              setCallSid: (v: string | null) => (callSid = v),
+            },
+            abortRef: {
+              get: () => currentAbort,
+              set: (a: any) => (currentAbort = a),
+            },
+            isDebug,
+          });
+        } catch (err) {
+          log.error('[relay] onMessage:error', {
+            error: (err as any)?.message || String(err),
+          });
+        }
+      },
+      onError() {
+        if (currentAbort) currentAbort.abort('ws-error');
+        log.error('[relay] ws:error', { connectionId, callSid });
+      },
+      onClose() {
+        if (currentAbort) currentAbort.abort('ws-closed');
+        currentAbort = null;
+        if (callSid) sessions.clear(callSid);
+        log.info('[relay] close', { connectionId, callSid });
+      },
+    };
+  };
+}
 
-            const msg = JSON.parse(data);
-            const type = msg?.type;
-            switch (type) {
-              case 'setup': {
-                callSid = msg.callSid || null;
-                if (callSid && !sessions.has(callSid)) {
-                  sessions.set(callSid, [
-                    { role: 'system', content: process.env.SYSTEM_PROMPT || '' },
-                  ].filter((m) => m.content) as SimpleMessage[]);
-                }
-                console.log('[relay] setup', { connectionId, callSid });
-                return;
-              }
-              case 'prompt': {
-                const userText: string = msg.voicePrompt || msg.text || '';
-                if (!userText) return;
+function safeParseMessage(event: MessageEvent<WSMessageReceive>) {
+  const data = typeof event.data === 'string' ? event.data : '';
+  if (!data) return null;
+  const raw = JSON.parse(data);
+  return parseKnownMessage(raw) || raw;
+}
 
-                // Abort previous stream if any
-                if (currentAbort) currentAbort.abort('superseded');
-                currentAbort = new (globalThis as any).AbortController();
+type RelayState = {
+  connectionId: string;
+  callSidRef: () => string | null;
+  setCallSid: (v: string | null) => void;
+};
+type AbortRef = { get: () => any; set: (a: any) => void };
 
-                let timer: ReturnType<typeof setTimeout> | undefined;
-                const startedAt = Date.now();
-                const turnId = nanoid(6);
-                const preview = userText.slice(0, 140);
-                console.log('[relay] prompt:received', {
-                  connectionId,
-                  callSid,
-                  turnId,
-                  len: userText.length,
-                  preview,
-                });
-                try {
-                  const timeoutMs = Number(process.env.AI_TIMEOUT_MS || 20000);
-                  timer = setTimeout(() => currentAbort?.abort('timeout'), timeoutMs);
+async function routeRelayMessage(args: {
+  parsed: any;
+  ws: WSContext;
+  state: RelayState;
+  abortRef: AbortRef;
+  isDebug: boolean;
+}) {
+  const { parsed, ws, state, abortRef, isDebug } = args;
+  const type = parsed?.type;
+  switch (type) {
+    case 'setup':
+      return handleSetup(parsed, state);
+    case 'prompt':
+      return handlePrompt(parsed, ws, state, abortRef, isDebug);
+    case 'interrupt':
+      return handleInterrupt(state, abortRef);
+    case 'ping':
+      ws.send(JSON.stringify({ type: 'pong' }));
+      return;
+    default:
+      return; // ignore lifecycle and unknown
+  }
+}
 
-                  // If we have a session, include conversation history
-                  let textStream: AsyncIterable<string>;
-                  let usedMessages = false;
-                  if (callSid && sessions.has(callSid)) {
-                    const history = sessions.get(callSid)!;
-                    const withUser: SimpleMessage[] = [
-                      ...history,
-                      { role: 'user', content: userText },
-                    ];
-                    textStream = await streamAnswerWithMessages(withUser, {
-                      abortSignal: currentAbort.signal,
-                    });
-                    usedMessages = true;
-                    // Append assistant text after stream finishes (collecting would add latency); we skip persisting assistant chunk-by-chunk.
-                    // Optionally, we could buffer into a small string to store minimal assistant history.
-                    // For now, update history with the last user turn only.
-                    sessions.set(callSid, withUser);
-                  } else {
-                    textStream = await streamAnswer(userText, {
-                      abortSignal: currentAbort.signal,
-                    });
-                  }
+function handleSetup(parsed: any, state: RelayState) {
+  const callSid = parsed?.callSid || null;
+  state.setCallSid(callSid);
+  if (callSid) {
+    sessions.getOrInit(
+      callSid,
+      [{ role: 'system', content: getEnv().SYSTEM_PROMPT || '' }].filter(
+        Boolean
+      ) as SimpleMessage[]
+    );
+  }
+  log.info('[relay] setup', { connectionId: state.connectionId, callSid });
+}
 
-                  const model = process.env.AI_MODEL || 'gpt-4o-mini';
-                  if (isDebug) {
-                    console.log('[relay] prompt:stream-start', {
-                      connectionId,
-                      callSid,
-                      turnId,
-                      model,
-                      usedMessages,
-                    });
-                  }
+async function handlePrompt(
+  parsed: any,
+  ws: WSContext,
+  state: RelayState,
+  abortRef: AbortRef,
+  isDebug: boolean
+) {
+  const text: string = parsed?.voicePrompt || parsed?.text || '';
+  if (!text) return;
+  startAbort(abortRef);
+  const { turnId, startedAt } = logPromptReceived(text, state);
+  const timer = startTimeout(abortRef);
+  try {
+    const { stream, usedMessages } = await getTextStream(state, text, abortRef);
+    logStreamStart(isDebug, state, turnId, usedMessages);
+    const { chunks, chars } = await sendStream(ws, stream);
+    logStreamFinish(state, turnId, startedAt, chunks, chars);
+  } catch (err) {
+    logStreamError(state, turnId, startedAt, err);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
-                  let chunks = 0;
-                  let chars = 0;
-                  for await (const chunk of textStream) {
-                    chunks++;
-                    chars += chunk.length;
-                    ws.send(
-                      JSON.stringify({ type: 'text', token: chunk, last: false })
-                    );
-                  }
-                  // final chunk marker
-                  ws.send(JSON.stringify({ type: 'text', token: '', last: true }));
-                  const durationMs = Date.now() - startedAt;
-                  console.log('[relay] prompt:stream-finish', {
-                    connectionId,
-                    callSid,
-                    turnId,
-                    chunks,
-                    chars,
-                    durationMs,
-                  });
-                } catch (err) {
-                  const durationMs = Date.now() - startedAt;
-                  console.error('[relay] prompt:error', {
-                    connectionId,
-                    callSid,
-                    turnId,
-                    durationMs,
-                    error: (err as any)?.message || String(err),
-                  });
-                } finally {
-                  if (timer) clearTimeout(timer);
-                }
-                return;
-              }
-              case 'interrupt': {
-                if (currentAbort) currentAbort.abort('interrupt');
-                console.log('[relay] interrupt', { connectionId, callSid });
-                return;
-              }
-              case 'ping': {
-                ws.send(JSON.stringify({ type: 'pong' }));
-                return;
-              }
-              // Common lifecycle events to acknowledge/log
-              case 'start':
-              case 'connected':
-              case 'keepalive':
-              case 'end':
-              case 'close':
-              case 'media':
-                // No-op but useful for debugging
-                // console.log('Relay event:', type);
-                return;
-              default: {
-                // Unknown message type; ignore safely
-                return;
-              }
-            }
-          } catch (err) {
-            console.error('[relay] onMessage:error', {
-              error: (err as any)?.message || String(err),
-            });
-          }
-        },
-        onError(_event: Event, _ws: WSContext) {
-          // console.error('WS onError:', _event?.message || _event);
-          if (currentAbort) currentAbort.abort('ws-error');
-          console.error('[relay] ws:error', { connectionId, callSid });
-        },
-        onClose() {
-          if (currentAbort) currentAbort.abort('ws-closed');
-          currentAbort = null;
-          if (callSid) sessions.delete(callSid);
-          console.log('[relay] close', { connectionId, callSid });
-        },
-      };
+function handleInterrupt(state: RelayState, abortRef: AbortRef) {
+  if (abortRef.get()) abortRef.get().abort('interrupt');
+  log.info('[relay] interrupt', {
+    connectionId: state.connectionId,
+    callSid: state.callSidRef(),
+  });
+}
+
+function startAbort(abortRef: AbortRef) {
+  if (abortRef.get()) abortRef.get().abort('superseded');
+  abortRef.set(new (globalThis as any).AbortController());
+}
+
+function logPromptReceived(text: string, state: RelayState) {
+  const turnId = nanoid(6);
+  const preview = text.slice(0, 140);
+  log.info('[relay] prompt:received', {
+    connectionId: state.connectionId,
+    callSid: state.callSidRef(),
+    turnId,
+    len: text.length,
+    preview,
+  });
+  return { turnId, startedAt: Date.now() };
+}
+
+function startTimeout(abortRef: AbortRef) {
+  const timeoutMs = getEnv().AI_TIMEOUT_MS;
+  return setTimeout(() => abortRef.get()?.abort('timeout'), timeoutMs);
+}
+
+async function getTextStream(
+  state: RelayState,
+  userText: string,
+  abortRef: AbortRef
+) {
+  if (state.callSidRef()) {
+    const history = sessions.get(state.callSidRef()!) || [];
+    const withUser: SimpleMessage[] = [
+      ...history,
+      { role: 'user', content: userText },
+    ];
+    const stream = await streamAnswerWithMessages(withUser, {
+      abortSignal: abortRef.get().signal,
     });
+    sessions.set(state.callSidRef()!, withUser);
+    return { stream, usedMessages: true } as const;
+  }
+  const stream = await streamAnswer(userText, {
+    abortSignal: abortRef.get().signal,
+  });
+  return { stream, usedMessages: false } as const;
+}
 
-  // Register both tutorial-style and previous route for flexibility
-  app.get('/ws', makeRelayHandler());
-  app.get('/twilio/relay', makeRelayHandler());
+function logStreamStart(
+  isDebug: boolean,
+  state: RelayState,
+  turnId: string,
+  usedMessages: boolean
+) {
+  if (!isDebug) return;
+  log.debug('[relay] prompt:stream-start', {
+    connectionId: state.connectionId,
+    callSid: state.callSidRef(),
+    turnId,
+    model: getEnv().AI_MODEL,
+    usedMessages,
+  });
+}
+
+async function sendStream(ws: WSContext, stream: AsyncIterable<string>) {
+  let chunks = 0;
+  let chars = 0;
+  for await (const chunk of stream) {
+    chunks++;
+    chars += chunk.length;
+    ws.send(JSON.stringify({ type: 'text', token: chunk, last: false }));
+  }
+  ws.send(JSON.stringify({ type: 'text', token: '', last: true }));
+  return { chunks, chars };
+}
+
+function logStreamFinish(
+  state: RelayState,
+  turnId: string,
+  startedAt: number,
+  chunks: number,
+  chars: number
+) {
+  const durationMs = Date.now() - startedAt;
+  log.info('[relay] prompt:stream-finish', {
+    connectionId: state.connectionId,
+    callSid: state.callSidRef(),
+    turnId,
+    chunks,
+    chars,
+    durationMs,
+  });
+}
+
+function logStreamError(
+  state: RelayState,
+  turnId: string,
+  startedAt: number,
+  err: unknown
+) {
+  const durationMs = Date.now() - startedAt;
+  log.error('[relay] prompt:error', {
+    connectionId: state.connectionId,
+    callSid: state.callSidRef(),
+    turnId,
+    durationMs,
+    error: (err as any)?.message || String(err),
+  });
 }

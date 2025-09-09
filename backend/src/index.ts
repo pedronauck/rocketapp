@@ -2,13 +2,14 @@ import { Hono, type Context, type ErrorHandler } from 'hono';
 import { cors } from 'hono/cors';
 import { upgradeWebSocket, websocket } from 'hono/bun';
 import dotenv from 'dotenv';
-
-dotenv.config();
+import { getEnv } from './config/env';
+import { log } from './utils/log';
+import { registerTwilioRoutes } from './routes/twilio';
 
 const app = new Hono();
-const PORT = Number(process.env.PORT) || 3005;
-
-// WebSocket helper for Bun <-> Hono (imported directly)
+dotenv.config();
+const env = getEnv();
+const PORT = env.PORT;
 
 // CORS middleware applied only where needed (avoid WS upgrade conflicts)
 app.use(
@@ -26,13 +27,9 @@ app.get('/health', (c: Context) => {
   });
 });
 
-// Twilio Conversation Relay endpoints
-import { registerTwilioRoutes } from './routes/twilio';
-registerTwilioRoutes(app, upgradeWebSocket);
-
 // Error handler (normalized shape)
 const errorHandler: ErrorHandler = (err: Error, c: Context) => {
-  console.error(err.stack);
+  log.error(err.stack);
   return c.json(
     {
       error: 'internal_error',
@@ -41,6 +38,8 @@ const errorHandler: ErrorHandler = (err: Error, c: Context) => {
     500
   );
 };
+
+registerTwilioRoutes(app, upgradeWebSocket);
 
 app.onError(errorHandler);
 
