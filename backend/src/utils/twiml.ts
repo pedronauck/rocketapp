@@ -11,21 +11,14 @@ export function generateTwiML(opts: TwiMLOpts): string {
     ? ` welcomeGreeting="${escapeXml(welcomeGreeting)}"`
     : '';
 
-  // Use Amazon Polly Matthew voice for robotic sound
-  // Standard voices sound more robotic than neural voices
-  // See: https://www.twilio.com/docs/voice/twiml/say/text-speech#amazon-polly
+  // ConversationRelay minimal configuration
+  // Voice settings must be configured via the WebSocket relay service, not TwiML
   
   return (
     `<?xml version="1.0" encoding="UTF-8"?>` +
     `<Response>` +
     `<Connect>` +
-    `<ConversationRelay url="${escapeXml(websocketUrl)}"` +
-    ` voice="Polly.Matthew"` +
-    ` language="en-US"` +
-    `${greetingAttr}` +
-    ` welcomeGreetingInterruptible="false"` +
-    ` dtmfDetection="true"` +
-    ` interruptible="true"/>` +
+    `<ConversationRelay url="${escapeXml(websocketUrl)}"${greetingAttr}/>` +
     `</Connect>` +
     `</Response>`
   );
