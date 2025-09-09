@@ -2,6 +2,7 @@ import { Database } from 'bun:sqlite';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { log } from '../utils/log';
+import type { SimpleMessage } from '../services/ai';
 
 export interface Caller {
   phone_number: string;
@@ -143,9 +144,147 @@ class CallDatabase {
     ]);
   }
 
+  // Get recent conversation for a phone number (for context recovery)
+  async getRecentConversation(phoneNumber: string, limit: number = 1): Promise<Conversation[]> {
+    return new Promise((resolve) => {
+      try {
+        const stmt = this.db.prepare(`
+          SELECT call_sid, phone_number, messages, started_at, ended_at
+          FROM conversations
+          WHERE phone_number = ?
+          ORDER BY started_at DESC
+          LIMIT ?
+        `);
+        const results = stmt.all(phoneNumber, limit) as Conversation[];
+        resolve(results || []);
+      } catch (error) {
+        log.error('[db] Error getting recent conversations', { phoneNumber, error });
+        resolve([]);
+      }
+    });
+  }
+
+  // Get conversation history with summaries for context (Phase 7)
+  async getConversationContext(phoneNumber: string, hoursBack: number = 24): Promise<{
+    recentTopics: string[];
+    conversationCount: number;
+    lastCallTime: number | null;
+  }> {
+    return new Promise((resolve) => {
+      try {
+        const cutoffTime = Math.floor(Date.now() / 1000) - (hoursBack * 3600);
+        
+        // Get recent conversations
+        const stmt = this.db.prepare(`
+          SELECT messages, started_at, ended_at
+          FROM conversations
+          WHERE phone_number = ? 
+            AND started_at > ?
+            AND ended_at IS NOT NULL
+          ORDER BY started_at DESC
+          LIMIT 10
+        `);
+        
+        const conversations = stmt.all(phoneNumber, cutoffTime) as Conversation[];
+        
+        if (!conversations || conversations.length === 0) {
+          resolve({ recentTopics: [], conversationCount: 0, lastCallTime: null });
+          return;
+        }
+
+        // Extract topics from conversations
+        const topics = new Set<string>();
+        let lastCallTime = conversations[0].started_at;
+        
+        for (const conv of conversations) {
+          try {
+            const messages = JSON.parse(conv.messages) as SimpleMessage[];
+            
+            // Extract Pokemon names and topics mentioned
+            for (const msg of messages) {
+              if (msg.role === 'user') {
+                // Look for Pokemon names (capitalized words)
+                const pokemonMatches = msg.content.match(/\b[A-Z][a-z]+(?:[-\s][A-Z]?[a-z]+)*\b/g);
+                if (pokemonMatches) {
+                  pokemonMatches.forEach(match => {
+                    // Common Pokemon names to track
+                    const commonPokemon = ['Pikachu', 'Charizard', 'Bulbasaur', 'Squirtle', 'Jigglypuff', 
+                                          'Mewtwo', 'Mew', 'Eevee', 'Snorlax', 'Dragonite'];
+                    if (commonPokemon.some(p => match.toLowerCase().includes(p.toLowerCase()))) {
+                      topics.add(match);
+                    }
+                  });
+                }
+                
+                // Look for specific topics
+                if (msg.content.toLowerCase().includes('evolution')) topics.add('evolution');
+                if (msg.content.toLowerCase().includes('type')) topics.add('types');
+                if (msg.content.toLowerCase().includes('move')) topics.add('moves');
+                if (msg.content.toLowerCase().includes('ability')) topics.add('abilities');
+                if (msg.content.toLowerCase().includes('stat')) topics.add('stats');
+              }
+            }
+          } catch (err) {
+            log.debug('[db] Error parsing conversation messages for context', { err });
+          }
+        }
+        
+        resolve({
+          recentTopics: Array.from(topics).slice(0, 5), // Top 5 topics
+          conversationCount: conversations.length,
+          lastCallTime
+        });
+        
+      } catch (error) {
+        log.error('[db] Error getting conversation context', { phoneNumber, error });
+        resolve({ recentTopics: [], conversationCount: 0, lastCallTime: null });
+      }
+    });
+  }
+
+  // Get conversation by call SID (for recovery after restart)
+  async getConversationBySid(callSid: string): Promise<Conversation | null> {
+    return new Promise((resolve) => {
+      try {
+        const stmt = this.db.prepare(`
+          SELECT call_sid, phone_number, messages, started_at, ended_at
+          FROM conversations
+          WHERE call_sid = ?
+        `);
+        const result = stmt.get(callSid) as Conversation | undefined;
+        resolve(result || null);
+      } catch (error) {
+        log.error('[db] Error getting conversation by SID', { callSid, error });
+        resolve(null);
+      }
+    });
+  }
+
+  // Mark all open conversations as ended (for cleanup)
+  closeAllOpenConversations(): number {
+    try {
+      const stmt = this.db.prepare(`
+        UPDATE conversations 
+        SET ended_at = unixepoch() 
+        WHERE ended_at IS NULL
+      `);
+      const result = stmt.run();
+      const count = result.changes;
+      if (count > 0) {
+        log.info('[db] Closed open conversations on shutdown', { count });
+      }
+      return count;
+    } catch (error) {
+      log.error('[db] Error closing open conversations', error);
+      return 0;
+    }
+  }
+
   // Close database connection
   close() {
     try {
+      // Close any open conversations first
+      this.closeAllOpenConversations();
       this.db.close();
       log.info('[db] Database connection closed');
     } catch (error) {

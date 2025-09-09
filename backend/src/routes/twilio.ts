@@ -15,6 +15,7 @@ import { parseKnownMessage } from '../types/relay';
 import { getRandomThinkingMessage } from '../utils/thinking-messages';
 import type { Context } from 'hono';
 import { getDatabase } from '../db/database';
+import { getBatchWriter } from '../services/batch-writer';
 
 // Helpers
 function resolveRelayWsUrl(req: Request): string {
@@ -73,11 +74,44 @@ function registerRelayRoutes(
 async function respondWithTwiML(c: Context, env: ReturnType<typeof getEnv>) {
   // Extract phone number from Twilio POST data
   let phoneNumber = '';
+  let welcomeGreeting = env.RELAY_WELCOME_GREETING || 'Welcome to the Pokédex Call Center.';
+  
   if (c.req.method === 'POST') {
     try {
       const formData = await c.req.parseBody();
       phoneNumber = (formData.From as string) || '';
       log.info('[twilio] Extracted phone number', { phoneNumber });
+      
+      // Quick caller lookup for personalized greeting
+      if (phoneNumber) {
+        try {
+          const db = getDatabase();
+          const caller = await db.getCallerQuickly(phoneNumber, 50); // 50ms timeout for TwiML response
+          
+          if (caller?.name) {
+            // Special pronunciation for bdougie
+            const displayName = caller.name === 'bdougie' ? 'bee dug ee' : caller.name;
+            
+            // Array of greeting variations
+            const greetings = [
+              `Sup ${displayName}! What Pokémon can I help you with today?`,
+              `Yo ${displayName}, good to hear from you! Which Pokémon are we looking up today?`,
+              `Hey ${displayName}, welcome back! What Pokémon info do you need?`,
+              `${displayName}! Great to hear from you again. What Pokémon should we explore?`,
+              `What's up ${displayName}? Ready to dive into some Pokémon facts?`
+            ];
+            
+            // Pick a random greeting
+            welcomeGreeting = greetings[Math.floor(Math.random() * greetings.length)];
+            log.info('[twilio] Personalized greeting for returning caller', { name: caller.name, greeting: welcomeGreeting });
+          } else {
+            welcomeGreeting = 'Welcome to the Pokédex Call Center. May I have your name please?';
+            log.info('[twilio] Default greeting for new caller');
+          }
+        } catch (err) {
+          log.error('[twilio] Error during caller lookup for greeting', err);
+        }
+      }
     } catch (err) {
       log.error('[twilio] Failed to parse form data', err);
     }
@@ -95,11 +129,9 @@ async function respondWithTwiML(c: Context, env: ReturnType<typeof getEnv>) {
 
   const xml = generateTwiML({
     websocketUrl: wsUrl,
-    welcomeGreeting: env.RELAY_WELCOME_GREETING,
+    welcomeGreeting,
   });
-  log.info('[twilio] respondWithTwiML -> replying TwiML with ws URL', {
-    wsUrl,
-  });
+  log.info('[twilio] respondWithTwiML -> replying TwiML with ws URL', { wsUrl, welcomeGreeting });
   return c.text(xml, 200, { 'Content-Type': 'text/xml' });
 }
 
@@ -186,13 +218,13 @@ function makeRelayHandlerFactory(env: ReturnType<typeof getEnv>) {
         if (currentAbort) currentAbort.abort('ws-closed');
         currentAbort = null;
 
-        // Mark conversation as ended in database
+        // Mark conversation as ended using batch writer
         if (callSid && phoneNumber) {
           try {
-            const db = getDatabase();
+            const batchWriter = getBatchWriter();
             const finalMessages = sessions.get(callSid) || [];
-            db.updateConversationMessages(callSid, finalMessages, true); // true = ended
-            log.info('[relay] Marked conversation as ended in database', {
+            batchWriter.enqueue(callSid, finalMessages, true); // true = ended, will flush immediately
+            log.info('[relay] Marked conversation as ended in batch', {
               callSid,
             });
           } catch (err) {
@@ -212,6 +244,33 @@ function safeParseMessage(event: MessageEvent<WSMessageReceive>) {
   if (!data) return null;
   const raw = JSON.parse(data);
   return parseKnownMessage(raw) || raw;
+}
+
+function extractNameFromResponse(text: string): string | null {
+  // Common patterns for name introduction
+  const patterns = [
+    /my name is (\w+)/i,
+    /i'm (\w+)/i,
+    /i am (\w+)/i,
+    /this is (\w+)/i,
+    /call me (\w+)/i,
+    /it's (\w+)/i,
+    /^(\w+)$/i, // Single word response (likely just the name)
+  ];
+  
+  for (const pattern of patterns) {
+    const match = text.trim().match(pattern);
+    if (match && match[1]) {
+      // Capitalize first letter
+      const name = match[1].charAt(0).toUpperCase() + match[1].slice(1).toLowerCase();
+      // Basic validation - reasonable length and only letters
+      if (name.length >= 2 && name.length <= 20 && /^[A-Za-z]+$/.test(name)) {
+        return name;
+      }
+    }
+  }
+  
+  return null;
 }
 
 type RelayState = {
@@ -246,35 +305,166 @@ async function routeRelayMessage(args: {
   }
 }
 
-function handleSetup(parsed: any, state: RelayState) {
+async function handleSetup(parsed: any, state: RelayState) {
   const callSid = parsed?.callSid || null;
   state.setCallSid(callSid);
+  
   if (callSid) {
-    sessions.getOrInit(
-      callSid,
-      [{ role: 'system', content: getEnv().SYSTEM_PROMPT || '' }].filter(
-        Boolean
-      ) as SimpleMessage[]
-    );
-
-    // Create conversation in database if we have a phone number
+    // Start with base system prompt
+    let systemPrompt = getEnv().SYSTEM_PROMPT || 'You are a helpful Pokédex assistant.';
+    let callerName: string | null = null;
+    
+    // Quick caller lookup with timeout
     if (state.phoneNumber) {
       try {
         const db = getDatabase();
-        db.createConversation(callSid, state.phoneNumber);
-        log.info('[relay] Created conversation in database', {
-          callSid,
-          phoneNumber: state.phoneNumber,
-        });
+        
+        // Check for existing conversation (recovery scenario)
+        const existingConv = await db.getConversationBySid(callSid);
+        
+        if (existingConv && existingConv.messages) {
+          // Recover conversation context
+          try {
+            const messages = JSON.parse(existingConv.messages) as SimpleMessage[];
+            if (messages.length > 0) {
+              sessions.set(callSid, messages);
+              log.info('[relay] Recovered conversation from database', {
+                callSid,
+                messageCount: messages.length
+              });
+            }
+          } catch (parseErr) {
+            log.error('[relay] Failed to parse recovered messages', parseErr);
+          }
+        } else {
+          // Check for recent unclosed conversation (within last 5 minutes)
+          const recentConvs = await db.getRecentConversation(state.phoneNumber, 1);
+          if (recentConvs.length > 0 && !recentConvs[0].ended_at) {
+            const timeSinceStart = Date.now() / 1000 - recentConvs[0].started_at;
+            if (timeSinceStart < 300) { // 5 minutes
+              try {
+                const messages = JSON.parse(recentConvs[0].messages) as SimpleMessage[];
+                if (messages.length > 0) {
+                  // Recover context from previous unclosed conversation
+                  sessions.set(callSid, messages);
+                  log.info('[relay] Recovered recent unclosed conversation', {
+                    oldCallSid: recentConvs[0].call_sid,
+                    newCallSid: callSid,
+                    messageCount: messages.length,
+                    ageSeconds: Math.round(timeSinceStart)
+                  });
+                }
+              } catch (parseErr) {
+                log.error('[relay] Failed to parse recent conversation messages', parseErr);
+              }
+            }
+          }
+          
+          // Create new conversation record
+          db.createConversation(callSid, state.phoneNumber);
+          log.info('[relay] Created conversation in database', {
+            callSid,
+            phoneNumber: state.phoneNumber,
+          });
+        }
+        
+        // Try to get caller info quickly (100ms timeout)
+        const caller = await db.getCallerQuickly(state.phoneNumber, 100);
+        
+        // Get conversation context for returning callers (non-blocking)
+        let contextPromise: Promise<any> | null = null;
+        if (caller?.name) {
+          contextPromise = db.getConversationContext(state.phoneNumber, 24); // Last 24 hours
+        }
+        
+        if (caller?.name) {
+          // Returning caller - personalized greeting
+          callerName = caller.name;
+          // Special pronunciation for bdougie
+          const displayName = callerName === 'bdougie' ? 'bee dug ee' : callerName;
+          
+          // Get conversation context if available
+          let contextInfo = '';
+          if (contextPromise) {
+            try {
+              const context = await Promise.race([
+                contextPromise,
+                new Promise(resolve => setTimeout(() => resolve(null), 150)) // 150ms timeout
+              ]);
+              
+              if (context && (context.recentTopics?.length > 0 || context.conversationCount > 0)) {
+                const timeSinceLastCall = context.lastCallTime 
+                  ? Math.floor((Date.now() / 1000 - context.lastCallTime) / 3600) 
+                  : null;
+                
+                // Build context string
+                if (context.recentTopics.length > 0) {
+                  contextInfo = ` Recently, they've asked about ${context.recentTopics.join(', ')}.`;
+                }
+                
+                if (timeSinceLastCall !== null && timeSinceLastCall < 1) {
+                  contextInfo += ' They called less than an hour ago.';
+                } else if (timeSinceLastCall !== null && timeSinceLastCall < 24) {
+                  contextInfo += ` They last called ${timeSinceLastCall} hours ago.`;
+                }
+                
+                log.info('[relay] Added conversation context', {
+                  phoneNumber: state.phoneNumber,
+                  topics: context.recentTopics,
+                  conversationCount: context.conversationCount
+                });
+              }
+            } catch (err) {
+              log.debug('[relay] Could not get conversation context', { err });
+            }
+          }
+          
+          // Variety of casual system prompts with context
+          const prompts = [
+            `You are a friendly Pokédex assistant. The caller is ${callerName} (pronounced "${displayName}").${contextInfo} They just heard a greeting, so jump right in with a casual "So what Pokémon are you curious about?" or similar. Keep it brief and conversational.`,
+            `You are a helpful Pokédex assistant. ${callerName} (pronounced "${displayName}") is calling back.${contextInfo} Since they were already greeted, just ask casually what Pokémon they want to know about. Be friendly but brief.`,
+            `You're the Pokédex assistant. ${callerName} (pronounced "${displayName}") just called and was greeted.${contextInfo} Follow up naturally with something like "Which Pokémon should we look up?" Keep it casual and short.`,
+            `You are a knowledgeable Pokédex assistant. The caller ${callerName} (pronounced "${displayName}") was just welcomed.${contextInfo} Simply ask what Pokémon info they need today. Stay casual and concise.`,
+            `You're helping ${callerName} (pronounced "${displayName}") with Pokémon information.${contextInfo} They just heard a greeting, so get right to it - ask what Pokémon they're interested in. Keep it friendly and brief.`
+          ];
+          
+          // If they've talked about specific Pokemon recently, we can reference them
+          if (contextInfo.includes('Recently')) {
+            const contextAwarePrompts = [
+              `You are a friendly Pokédex assistant. ${callerName} is back!${contextInfo} They were just greeted. You can reference their previous interests if relevant, or help with something new. Keep it natural and brief.`,
+              `You're the Pokédex assistant helping ${callerName}.${contextInfo} After the greeting, see if they want to continue exploring those topics or learn about something new. Stay conversational.`
+            ];
+            prompts.push(...contextAwarePrompts);
+          }
+          
+          systemPrompt = prompts[Math.floor(Math.random() * prompts.length)];
+          log.info('[relay] Recognized returning caller', { name: callerName });
+        } else {
+          // New caller - ask for name
+          systemPrompt = `You are a helpful Pokédex assistant. This is a first-time caller. Start by welcoming them to the Pokédex Call Center and politely ask for their name before helping with Pokémon questions. Once they provide their name, acknowledge it warmly and then help with their Pokémon questions.`;
+          log.info('[relay] New caller detected');
+        }
       } catch (err) {
-        log.error('[relay] Failed to create conversation in database', err);
+        log.error('[relay] Error during caller lookup', err);
       }
     }
+    
+    // Initialize session with customized prompt
+    sessions.getOrInit(
+      callSid,
+      [{ role: 'system', content: systemPrompt }] as SimpleMessage[]
+    );
+    
+    // Store caller info in state for later use
+    (state as any).callerName = callerName;
+    (state as any).isNewCaller = !callerName;
   }
-  log.info('[relay] setup', {
-    connectionId: state.connectionId,
+  
+  log.info('[relay] setup', { 
+    connectionId: state.connectionId, 
     callSid,
     phoneNumber: state.phoneNumber,
+    isNewCaller: !(state as any).callerName
   });
 }
 
@@ -287,6 +477,36 @@ async function handlePrompt(
 ) {
   const text: string = parsed?.voicePrompt || parsed?.text || '';
   if (!text) return;
+  
+  // Check if this is a new caller and try to extract their name
+  if ((state as any).isNewCaller && !(state as any).nameExtracted) {
+    const extractedName = extractNameFromResponse(text);
+    if (extractedName && state.phoneNumber) {
+      try {
+        const db = getDatabase();
+        await db.saveCallerName(state.phoneNumber, extractedName);
+        (state as any).callerName = extractedName;
+        (state as any).nameExtracted = true;
+        log.info('[relay] Extracted and saved caller name', { 
+          name: extractedName, 
+          phoneNumber: state.phoneNumber 
+        });
+        
+        // Update the session's system prompt to reflect we now know their name
+        const callSid = state.callSidRef();
+        if (callSid) {
+          const history = sessions.get(callSid) || [];
+          if (history.length > 0 && history[0].role === 'system') {
+            history[0].content = `You are a helpful Pokédex assistant. The caller's name is ${extractedName}. You've just learned their name, so acknowledge it warmly and continue helping with their Pokémon questions.`;
+            sessions.set(callSid, history);
+          }
+        }
+      } catch (err) {
+        log.error('[relay] Failed to save caller name', err);
+      }
+    }
+  }
+  
   startAbort(abortRef);
   const { turnId, startedAt } = logPromptReceived(text, state);
   const timer = startTimeout(abortRef);
@@ -302,7 +522,32 @@ async function handlePrompt(
 
     const { stream, usedMessages } = await getTextStream(state, text, abortRef);
     logStreamStart(isDebug, state, turnId, usedMessages);
-    const { chunks, chars } = await sendStream(ws, stream);
+    const { chunks, chars, fullResponse } = await sendStream(ws, stream);
+    
+    // Save assistant response to session and database
+    if (state.callSidRef() && fullResponse) {
+      const history = sessions.get(state.callSidRef()!) || [];
+      const withAssistant: SimpleMessage[] = [
+        ...history,
+        { role: 'assistant', content: fullResponse },
+      ];
+      sessions.set(state.callSidRef()!, withAssistant);
+      
+      // Use batch writer for efficient database updates
+      if (state.phoneNumber) {
+        try {
+          const batchWriter = getBatchWriter();
+          batchWriter.enqueue(state.callSidRef()!, withAssistant, false);
+          log.debug('[relay] Queued conversation update with assistant response', {
+            callSid: state.callSidRef(),
+            messageCount: withAssistant.length,
+          });
+        } catch (err) {
+          log.error('[relay] Failed to queue conversation update', err);
+        }
+      }
+    }
+    
     logStreamFinish(state, turnId, startedAt, chunks, chars);
   } catch (err) {
     logStreamError(state, turnId, startedAt, err);
@@ -358,13 +603,16 @@ async function getTextStream(
     });
     sessions.set(state.callSidRef()!, withUser);
 
-    // Update conversation in database
+    // Use batch writer for user messages too
     if (state.phoneNumber) {
       try {
-        const db = getDatabase();
-        db.updateConversationMessages(state.callSidRef()!, withUser);
+        const batchWriter = getBatchWriter();
+        batchWriter.enqueue(state.callSidRef()!, withUser, false);
+        log.debug('[relay] Queued user message to batch', {
+          callSid: state.callSidRef(),
+        });
       } catch (err) {
-        log.error('[relay] Failed to update conversation messages', err);
+        log.error('[relay] Failed to queue user message', err);
       }
     }
 
@@ -395,13 +643,15 @@ function logStreamStart(
 async function sendStream(ws: WSContext, stream: AsyncIterable<string>) {
   let chunks = 0;
   let chars = 0;
+  let fullResponse = '';
   for await (const chunk of stream) {
     chunks++;
     chars += chunk.length;
+    fullResponse += chunk;
     ws.send(JSON.stringify({ type: 'text', token: chunk, last: false }));
   }
   ws.send(JSON.stringify({ type: 'text', token: '', last: true }));
-  return { chunks, chars };
+  return { chunks, chars, fullResponse };
 }
 
 function logStreamFinish(
