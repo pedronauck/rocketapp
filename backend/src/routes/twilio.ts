@@ -92,20 +92,20 @@ async function respondWithTwiML(c: Context, env: ReturnType<typeof getEnv>) {
             // Special pronunciation for bdougie
             const displayName = caller.name === 'bdougie' ? 'bee dug ee' : caller.name;
             
-            // Pokédex-style greeting variations  
+            // Array of greeting variations
             const greetings = [
-              `Trainer ${displayName} recognized. Pokédex ready for query.`,
-              `Identity confirmed: ${displayName}. Awaiting Pokémon selection.`,
-              `Welcome back, Trainer ${displayName}. Database access granted.`,
-              `Trainer profile loaded: ${displayName}. State target Pokémon.`,
-              `User ${displayName} authenticated. Pokédex systems online.`
+              `Sup ${displayName}! What Pokémon can I help you with today?`,
+              `Yo ${displayName}, good to hear from you! Which Pokémon are we looking up today?`,
+              `Hey ${displayName}, welcome back! What Pokémon info do you need?`,
+              `${displayName}! Great to hear from you again. What Pokémon should we explore?`,
+              `What's up ${displayName}? Ready to dive into some Pokémon facts?`
             ];
             
             // Pick a random greeting
             welcomeGreeting = greetings[Math.floor(Math.random() * greetings.length)];
             log.info('[twilio] Personalized greeting for returning caller', { name: caller.name, greeting: welcomeGreeting });
           } else {
-            welcomeGreeting = 'Pokédex system activated. Trainer identification required. Please state your name.';
+            welcomeGreeting = 'Welcome to the Pokédex Call Center. May I have your name please?';
             log.info('[twilio] Default greeting for new caller');
           }
         } catch (err) {
@@ -419,17 +419,20 @@ async function handleSetup(parsed: any, state: RelayState) {
             }
           }
           
-          // Simplified Pokédex system prompts
+          // Variety of casual system prompts with context
           const prompts = [
-            `You are a Pokédex. Speak like a robotic database. Trainer ${callerName} recognized.${contextInfo} Ask which Pokémon to analyze.`,
-            `You are the Pokédex system. Use short, analytical responses. Trainer ${callerName} authenticated.${contextInfo} Ready for queries.`,
-            `You are a digital Pokédex. Respond with data-like statements. User: ${callerName}.${contextInfo} Awaiting Pokémon selection.`
+            `You are a friendly Pokédex assistant. The caller is ${callerName} (pronounced "${displayName}").${contextInfo} They just heard a greeting, so jump right in with a casual "So what Pokémon are you curious about?" or similar. Keep it brief and conversational.`,
+            `You are a helpful Pokédex assistant. ${callerName} (pronounced "${displayName}") is calling back.${contextInfo} Since they were already greeted, just ask casually what Pokémon they want to know about. Be friendly but brief.`,
+            `You're the Pokédex assistant. ${callerName} (pronounced "${displayName}") just called and was greeted.${contextInfo} Follow up naturally with something like "Which Pokémon should we look up?" Keep it casual and short.`,
+            `You are a knowledgeable Pokédex assistant. The caller ${callerName} (pronounced "${displayName}") was just welcomed.${contextInfo} Simply ask what Pokémon info they need today. Stay casual and concise.`,
+            `You're helping ${callerName} (pronounced "${displayName}") with Pokémon information.${contextInfo} They just heard a greeting, so get right to it - ask what Pokémon they're interested in. Keep it friendly and brief.`
           ];
           
           // If they've talked about specific Pokemon recently, we can reference them
           if (contextInfo.includes('Recently')) {
             const contextAwarePrompts = [
-              `You are a Pokédex. Trainer ${callerName} has previous queries.${contextInfo} Continue analysis or await new selection.`
+              `You are a friendly Pokédex assistant. ${callerName} is back!${contextInfo} They were just greeted. You can reference their previous interests if relevant, or help with something new. Keep it natural and brief.`,
+              `You're the Pokédex assistant helping ${callerName}.${contextInfo} After the greeting, see if they want to continue exploring those topics or learn about something new. Stay conversational.`
             ];
             prompts.push(...contextAwarePrompts);
           }
@@ -437,8 +440,8 @@ async function handleSetup(parsed: any, state: RelayState) {
           systemPrompt = prompts[Math.floor(Math.random() * prompts.length)];
           log.info('[relay] Recognized returning caller', { name: callerName });
         } else {
-          // New caller - ask for name in Pokédex style
-          systemPrompt = `You are a Pokédex. Speak like a robotic database. New trainer detected. Ask for their name to register them in the database.`;
+          // New caller - ask for name
+          systemPrompt = `You are a helpful Pokédex assistant. This is a first-time caller. Start by welcoming them to the Pokédex Call Center and politely ask for their name before helping with Pokémon questions. Once they provide their name, acknowledge it warmly and then help with their Pokémon questions.`;
           log.info('[relay] New caller detected');
         }
       } catch (err) {
@@ -494,7 +497,7 @@ async function handlePrompt(
         if (callSid) {
           const history = sessions.get(callSid) || [];
           if (history.length > 0 && history[0].role === 'system') {
-            history[0].content = `You are a Pokédex. Trainer ${extractedName} registered. Speak like a robotic database. Ready for Pokémon queries.`;
+            history[0].content = `You are a helpful Pokédex assistant. The caller's name is ${extractedName}. You've just learned their name, so acknowledge it warmly and continue helping with their Pokémon questions.`;
             sessions.set(callSid, history);
           }
         }
