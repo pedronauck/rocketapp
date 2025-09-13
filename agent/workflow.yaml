@@ -34,6 +34,8 @@ tools:
 
 agents:
   - id: pokedex
+    config:
+      $ref: global::models.#(provider=="groq")
     instructions: |
       You are a Pokédex assistant. Given the name of a Pokémon, provide concise, factual basics.
       Prefer canonical game data; if uncertain, state so. Always return valid JSON when requested.

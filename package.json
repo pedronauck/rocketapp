@@ -3,7 +3,9 @@
   "private": true,
   "packageManager": "bun@1.2.21",
   "workspaces": [
-    "backend"
+    "backend",
+    "frontend",
+    "agent"
   ],
   "scripts": {
     "dev": "turbo run dev",
