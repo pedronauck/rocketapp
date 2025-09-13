@@ -46,6 +46,46 @@ export function getRandomThinkingMessage(): string {
 }
 
 /**
+ * Image processing messages - sent when analyzing Pokémon photos
+ */
+const IMAGE_PROCESSING_MESSAGES = [
+  'I received your photo! Let me analyze this Pokémon for you...',
+  'Got your Pokémon photo! Give me a moment to identify it...',
+  'Photo received! My Pokédex scanner is working on it...',
+  'I see your Pokémon photo! Just analyzing it now...',
+  'Thanks for the photo! Let me research this Pokémon...',
+  'Photo captured! Scanning the Pokédex database...',
+  'I got your image! Let me identify this Pokémon...',
+  'Photo received! My vision system is processing it...',
+  'Thanks for sending the photo! Analyzing now...',
+  'I see the Pokémon photo! Let me examine it carefully...',
+  'Photo received! My Pokédex is identifying it...',
+  'Got it! Let me scan this Pokémon with my database...',
+  'Thanks for the image! Processing the Pokémon identification...',
+  'Photo received! Let me research this one in my Pokédex...',
+  'I got your Pokémon photo! Analyzing it now...',
+] as const;
+
+/**
+ * Get a random image processing message
+ * @returns A random friendly image processing message
+ */
+export function getRandomImageProcessingMessage(): string {
+  const randomIndex = Math.floor(
+    Math.random() * IMAGE_PROCESSING_MESSAGES.length
+  );
+  return IMAGE_PROCESSING_MESSAGES[randomIndex];
+}
+
+/**
+ * Get the total number of available image processing messages
+ * @returns The count of image processing messages
+ */
+export function getImageProcessingMessagesCount(): number {
+  return IMAGE_PROCESSING_MESSAGES.length;
+}
+
+/**
  * Get the total number of available thinking messages
  * @returns The count of thinking messages
  */

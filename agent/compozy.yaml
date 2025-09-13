@@ -10,10 +10,11 @@ workflows:
   - source: ./workflow.yaml
 
 models:
-  - provider: openai
-    model: gpt-4o-mini
-    api_key: "{{ .env.OPENAI_API_KEY }}"
-    default: true
+  - provider: groq
+    model: openai/gpt-oss-120b
+    api_key: "{{ .env.GROQ_API_KEY }}"
+    params:
+      temperature: 0.3
 
 runtime:
   type: bun

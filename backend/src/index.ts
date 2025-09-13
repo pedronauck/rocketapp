@@ -6,6 +6,8 @@ import { getEnv } from './config/env';
 import { log } from './utils/log';
 import { registerTwilioRoutes } from './routes/twilio';
 import { registerStreamRoutes } from './routes/stream';
+import { registerAuthRoutes } from './routes/auth';
+import { registerPokemonRoutes } from './routes/pokemon';
 import { initDatabase } from './db/database';
 
 const app = new Hono();
@@ -39,6 +41,32 @@ app.get('/health', (c: Context) => {
   });
 });
 
+// Serve locally uploaded images for agent consumption
+app.get('/img/:file', async (c: Context) => {
+  const name = c.req.param('file');
+  const path = `./uploads/img/${name}`;
+  try {
+    const file = Bun.file(path);
+    if (!(await file.exists())) {
+      return c.json({ error: 'not_found', message: 'Image not found' }, 404);
+    }
+    const buf = await file.arrayBuffer();
+    const ext = name.split('.').pop()?.toLowerCase();
+    const type =
+      ext === 'jpg' || ext === 'jpeg'
+        ? 'image/jpeg'
+        : ext === 'gif'
+        ? 'image/gif'
+        : ext === 'webp'
+        ? 'image/webp'
+        : 'image/png';
+    return new Response(buf, { headers: { 'Content-Type': type } });
+  } catch (err) {
+    log.error('[static] failed to serve image', err);
+    return c.json({ error: 'internal_error', message: 'Failed to serve image' }, 500);
+  }
+});
+
 // Error handler (normalized shape)
 const errorHandler: ErrorHandler = (err: Error, c: Context) => {
   log.error(err.stack);
@@ -53,6 +81,8 @@ const errorHandler: ErrorHandler = (err: Error, c: Context) => {
 
 registerTwilioRoutes(app, upgradeWebSocket);
 registerStreamRoutes(app);
+registerAuthRoutes(app);
+registerPokemonRoutes(app);
 
 app.onError(errorHandler);
 

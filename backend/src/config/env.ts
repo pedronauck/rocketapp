@@ -7,18 +7,20 @@ const EnvSchema = z.object({
     .default('info'),
 
   // AI / Models
-  // Default model per requirements
+  // Default text model (we use Groq for all text)
   AI_MODEL: z.string().min(1).default('openai/gpt-oss-20b'),
-  // Choose which provider to use for AI SDK models
-  PROVIDER: z
-    .union([z.literal('openai'), z.literal('groq')])
-    .optional()
-    .default('openai'),
+  // Vision model (OpenAI only)
+  AI_VISION_MODEL: z.string().min(1).default('openai/gpt-4o-mini'),
   AI_TIMEOUT_MS: z.coerce.number().int().positive().default(20_000),
 
   // External services
   POKE_MCP_SSE_URL: z.string().url().optional(),
   OPENAI_API_KEY: z.string().optional(),
+  // Provider for text models only (vision always uses OpenAI). Default: groq
+  PROVIDER: z
+    .union([z.literal('openai'), z.literal('groq')])
+    .optional()
+    .default('groq'),
   GROQ_API_KEY: z.string().optional(),
 
   // Twilio / Relay
@@ -37,6 +39,26 @@ const EnvSchema = z.object({
     .optional()
     .default(true),
   TWILIO_AUTH_TOKEN: z.string().optional(),
+  TWILIO_ACCOUNT_SID: z.string().optional(),
+  TWILIO_FROM_NUMBER: z.string().optional(),
+  TWILIO_MESSAGING_SERVICE_SID: z.string().optional(),
+  TWILIO_VERIFY_SERVICE_SID: z.string().optional(),
+  // When true, coerce outbound numbers to WhatsApp using whatsapp:+E164 prefix.
+  // Docs: https://www.twilio.com/docs/whatsapp/api
+  TWILIO_FORCE_WHATSAPP: z
+    .union([z.string(), z.boolean()])
+    .transform((v) =>
+      typeof v === 'string' ? v.toLowerCase() === 'true' : !!v
+    )
+    .optional()
+    .default(false),
+
+  // JWT Secret for session tokens
+  JWT_SECRET: z
+    .string()
+    .min(32)
+    .default('your-secret-key-change-in-production'),
+  JWT_EXPIRES_IN: z.string().default('7d'),
 
   // Prompt
   SYSTEM_PROMPT: z.string().optional(),
